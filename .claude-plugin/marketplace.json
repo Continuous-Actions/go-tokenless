@@ -1,0 +1,16 @@
+{
+  "name": "continuous-actions",
+  "owner": {
+    "name": "Continuous-Actions"
+  },
+  "metadata": {
+    "description": "Developer tools from Continuous-Actions."
+  },
+  "plugins": [
+    {
+      "name": "go-tokenless",
+      "source": "./",
+      "description": "Move npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC)."
+    }
+  ]
+}

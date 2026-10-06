@@ -95,6 +95,19 @@ Tools: `plan_trusted_publishing` (read-only) and `apply_trusted_publishing` (wri
 npx skills add Continuous-Actions/go-tokenless
 ```
 
+Or install the skill and MCP server together as a plugin:
+
+```bash
+# Claude Code
+/plugin marketplace add Continuous-Actions/go-tokenless
+/plugin install go-tokenless@continuous-actions
+```
+
+```bash
+# Gemini CLI
+gemini extensions install https://github.com/Continuous-Actions/go-tokenless
+```
+
 Just ask: *"Move our npm publishing to trusted publishing."*
 
 ## Options
