@@ -66,3 +66,38 @@ jobs:
           jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' server.json > server.tmp && mv server.tmp server.json
       - run: ./mcp-publisher login github-oidc
       - run: ./mcp-publisher publish
+
+  # Signed release assets: the published tarball plus a Sigstore-signed SLSA
+  # provenance attestation, attached to the GitHub release.
+  release-assets:
+    needs: npm
+    if: github.repository == 'Continuous-Actions/go-tokenless' && github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: corepack enable && yarn install --immutable && yarn build
+      - name: Pack the npm tarball
+        run: npm pack
+      - id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: go-tokenless-*.tgz
+      - name: Attach tarball and signed provenance to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          TGZ=$(ls go-tokenless-*.tgz)
+          cp "$BUNDLE" "$TGZ.intoto.jsonl"
+          gh release upload "$TAG" "$TGZ" "$TGZ.intoto.jsonl" --repo "$GITHUB_REPOSITORY" --clobber

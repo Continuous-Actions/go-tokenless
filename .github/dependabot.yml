@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # A cooldown gives the ecosystem time to catch compromised releases before we adopt them.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups:
+      actions: { patterns: ['*'] }
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups:
+      dev: { dependency-type: development }
