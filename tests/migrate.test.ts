@@ -484,3 +484,39 @@ jobs:
     expect(plan(root, '--read-token', 'NPM_READ_TOKEN').plan.status).toBe('already-tokenless');
   });
 });
+
+describe('read token and triggers', () => {
+  const wf = (on: string) => `on: ${on}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm ci
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+`;
+  const PKGJ = pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } });
+
+  it('reports which build jobs got the token, and mentions pull_request exposure', () => {
+    const p = plan(makeRepo({ '.github/workflows/r.yml': wf('[push, pull_request]'), 'package.json': PKGJ }), '--read-token', 'NPM_READ_TOKEN').plan;
+    const f = p.findings.find((x: any) => x.code === 'read-token-jobs');
+    expect(f.message).toContain('`build`');
+    expect(f.message).toContain('pull_request');
+  });
+
+  it('gives no job the token in a workflow outsiders can start', () => {
+    const root = makeRepo({ '.github/workflows/r.yml': wf('[push, pull_request_target]'), 'package.json': PKGJ });
+    run(root, 'apply', '--read-token', 'NPM_READ_TOKEN');
+    expect(read(root, '.github/workflows/r.yml')).not.toContain('NPM_READ_TOKEN');
+  });
+});

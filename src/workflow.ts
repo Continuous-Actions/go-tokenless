@@ -522,13 +522,21 @@ function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, call
 
   // Build and test jobs in the same workflow install private packages too.
   const active = jobs.some((j) => !j.blocked);
-  if (npm.readTokenSecret && active) {
+  // Never in workflows outsiders can start (those are blocked above anyway).
+  if (npm.readTokenSecret && active && untrusted.length === 0) {
     const done = new Set(jobs.map((j) => j.job));
+    const given: string[] = [];
     for (const jobPair of (jobsMap as YAMLMap).items as Pair<any, any>[]) {
       const id = str(jobPair.key)!;
       const steps = get(jobPair.value, 'steps');
       if (done.has(id) || !isSeq(steps)) continue;
-      edits.push(...giveReadToken(id, (steps.items.filter(isMap) as YAMLMap[]).filter((s) => isInstallRun(str(get(s, 'run')) ?? ''))));
+      const e = giveReadToken(id, (steps.items.filter(isMap) as YAMLMap[]).filter((s) => isInstallRun(str(get(s, 'run')) ?? '')));
+      if (e.length > 0) given.push(id);
+      edits.push(...e);
+    }
+    if (given.length > 0) {
+      const pr = triggers.includes('pull_request') ? ' The workflow also runs on `pull_request`: pull requests from branches in this repo get the token too (forks never do).' : '';
+      add({ level: 'info', line: 1, code: 'read-token-jobs', message: `The read-only token \`${npm.readTokenSecret}\` was also given to install steps in ${given.map((g) => `\`${g}\``).join(', ')}.${pr}` });
     }
   }
 
