@@ -229,6 +229,8 @@ function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, call
   const name = file.split('/').pop()!;
   const secrets = new Set<string>();
   const publishDirs = new Set<string>();
+  /** Jobs that publish to another registry: left completely alone. */
+  const otherRegistryJobs = new Set<string>();
   const empty: WorkflowPlan = { file, trustFile: name, reusable: false, jobs: [], findings, changes, secrets: [], publishDirs: [], after: text };
   let doc;
   try {
@@ -299,6 +301,7 @@ function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, call
     const setupNode = stepMaps.find((s) => (str(get(s, 'uses')) ?? '').toLowerCase().startsWith('actions/setup-node'));
     const registry = str(get(get(setupNode, 'with'), 'registry-url'));
     if (registry && !isNpmRegistry(registry)) {
+      otherRegistryJobs.add(jobId);
       add({ level: 'info', line: lineOf(jobPair.key), code: 'other-registry', message: `Job \`${jobId}\` publishes to ${registry}, not npmjs.org. Trusted publishing only applies to the npm registry, so it is left alone.` });
       continue;
     }
@@ -542,7 +545,7 @@ function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, call
     for (const jobPair of (jobsMap as YAMLMap).items as Pair<any, any>[]) {
       const id = str(jobPair.key)!;
       const steps = get(jobPair.value, 'steps');
-      if (done.has(id) || !isSeq(steps)) continue;
+      if (done.has(id) || otherRegistryJobs.has(id) || !isSeq(steps)) continue;
       const e = giveReadToken(id, (steps.items.filter(isMap) as YAMLMap[]).filter((s) => isInstallRun(str(get(s, 'run')) ?? '')));
       if (e.length > 0) given.push(id);
       edits.push(...e);

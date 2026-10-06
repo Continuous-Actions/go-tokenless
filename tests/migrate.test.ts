@@ -520,3 +520,37 @@ jobs:
     expect(read(root, '.github/workflows/r.yml')).not.toContain('NPM_READ_TOKEN');
   });
 });
+
+describe('read token and other registries', () => {
+  it('leaves a GitHub Packages job untouched', () => {
+    const wf = `on: push
+jobs:
+  gpr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          registry-url: https://npm.pkg.github.com
+      - run: npm ci
+      - run: npm publish
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+`;
+    const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) });
+    run(root, 'apply', '--read-token', 'NPM_READ_TOKEN');
+    const out = read(root, '.github/workflows/r.yml');
+    expect(out.slice(0, out.indexOf('  npm:'))).toBe(wf.slice(0, wf.indexOf('  npm:')));
+    expect(out.match(/NPM_READ_TOKEN/g)).toHaveLength(1);
+  });
+});
