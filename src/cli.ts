@@ -30,7 +30,7 @@ Options:
   -v, --version   Show the version
 
 Exit codes: 0 ok, 1 blocked (errors to fix by hand), 2 usage error, 3 unexpected error.
-Docs: https://github.com/Continuous-Actions/go-tokenless`;
+Docs: https://github.com/continuous-actions/go-tokenless`;
 
 export async function main(argv: string[]): Promise<number> {
   const args = [...argv];
