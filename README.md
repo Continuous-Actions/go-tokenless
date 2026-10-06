@@ -114,6 +114,7 @@ go-tokenless is built to be run by coding agents: `--json` output, clear exit co
 
 | Client | Setup |
 |---|---|
+| Claude directory (claude.ai, Cowork, Claude Code) | Submitted to [Anthropic's plugin directory](https://claude.ai/directory) and awaiting approval. Once listed: open the directory, search **go-tokenless** and select **Add**. It then syncs to Claude Code as `go-tokenless@synced`. Until then, use the marketplace command below |
 | Claude Code (plugin: skill + MCP) | `/plugin marketplace add Continuous-Actions/go-tokenless` then `/plugin install go-tokenless@continuous-actions` |
 | Claude Code (MCP only) | `claude mcp add go-tokenless -- npx -y go-tokenless mcp` |
 | Gemini CLI | `gemini extensions install https://github.com/Continuous-Actions/go-tokenless` |
