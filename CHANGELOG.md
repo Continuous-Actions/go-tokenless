@@ -7,7 +7,7 @@ First stable release. The CLI options, exit codes, `--json` plan shape and MCP t
 - Full GitHub `repository` URLs are left as they are; only shorthands and missing fields are rewritten.
 - Releases attach the npm tarball with a signed SLSA provenance attestation. CodeQL, Dependabot and fast-check fuzzing were added.
 
-### Security (from three adversarial review rounds)
+### Security
 
 - **Untrusted triggers are blocked.** A publish job in a workflow started by `pull_request_target`, `issue_comment`, `workflow_run` or similar is never given `id-token: write` or a trust command.
 - **Dry runs don't count as publishing.** Neither does `npm publish --dry-run` or an `echo` line.
@@ -48,7 +48,7 @@ First stable release. The CLI options, exit codes, `--json` plan shape and MCP t
 - **Unparsable workflows** are reported.
 - **`package.json` edits** change only the `repository` text: key order, numbers and escapes are kept, and a BOM is handled.
 
-### Other
+### And more
 
 
 - `--read-token <SECRET>` (MCP: `readToken`) gives install steps a read-only `NODE_AUTH_TOKEN` for private org packages; publish steps stay tokenless.

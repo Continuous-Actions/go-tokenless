@@ -1,12 +1,16 @@
 name: Release
 
-# Publishes to npm with trusted publishing (no NPM_TOKEN) when a GitHub release
-# is published, then lists the version in the MCP Registry using GitHub OIDC.
+# Pushing a version tag (v1.2.3) releases go-tokenless:
+#   npm           publish to npm with trusted publishing (no NPM_TOKEN)
+#   github        create the GitHub release with the tarball and a signed SLSA
+#                 provenance attestation. Releases are immutable, so it is built
+#                 as a draft, the assets are attached, then it is published.
+#   mcp-registry  list the version in the MCP Registry (GitHub OIDC)
 # The trusted publisher on npmjs.com names this file: release.yml.
-# Run it by hand (workflow_dispatch) to re-list the current npm version only.
+# Run it by hand (workflow_dispatch on main) to re-list the current npm version only.
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*.*.*']
   workflow_dispatch:
 
 permissions:
@@ -15,7 +19,7 @@ permissions:
 jobs:
   npm:
     # Forks inherit this workflow; only the upstream repository publishes.
-    if: github.repository == 'Continuous-Actions/go-tokenless' && github.event_name == 'release'
+    if: github.repository == 'Continuous-Actions/go-tokenless' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,9 +37,52 @@ jobs:
       - run: yarn check
       - name: Check the tag matches package.json
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.ref_name }}
         run: test "v$(node -p 'require("./package.json").version')" = "$TAG"
       - run: npm publish --access public
+
+  github:
+    needs: npm
+    if: github.repository == 'Continuous-Actions/go-tokenless' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: corepack enable && yarn install --immutable && yarn build
+      - name: Pack the npm tarball
+        run: npm pack
+      - id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: go-tokenless-*.tgz
+      - name: Create the release (draft, assets, then publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          TGZ=$(ls go-tokenless-*.tgz)
+          cp "$BUNDLE" "$TGZ.intoto.jsonl"
+          # Release notes: this version's section of CHANGELOG.md.
+          node -e '
+            const s = require("fs").readFileSync("CHANGELOG.md", "utf8");
+            const v = process.env.TAG.slice(1);
+            const start = s.indexOf("## " + v);
+            const end = s.indexOf("\n## ", start + 3);
+            process.stdout.write(start < 0 ? "" : s.slice(start + 3 + v.length, end < 0 ? undefined : end).trim() + "\n");
+          ' > notes.md
+          gh release create "$TAG" "$TGZ" "$TGZ.intoto.jsonl" --repo "$GITHUB_REPOSITORY" \
+            --draft --verify-tag --title "go-tokenless $TAG" --notes-file notes.md
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
 
   mcp-registry:
     needs: npm
@@ -59,45 +106,12 @@ jobs:
           curl -fsSL -o mcp-publisher.tar.gz "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
           echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
           tar xzf mcp-publisher.tar.gz mcp-publisher
-      - name: Set server.json version from package.json (must already be on npm)
+      - name: Set server.json version from package.json (waits until it is on npm)
         run: |
           VERSION="$(node -p 'require("./package.json").version')"
+          # npm takes a minute or two to make a new version visible.
+          for i in $(seq 1 20); do npm view "go-tokenless@$VERSION" version && break; sleep 15; done
           npm view "go-tokenless@$VERSION" version
           jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' server.json > server.tmp && mv server.tmp server.json
       - run: ./mcp-publisher login github-oidc
       - run: ./mcp-publisher publish
-
-  # Signed release assets: the published tarball plus a Sigstore-signed SLSA
-  # provenance attestation, attached to the GitHub release.
-  release-assets:
-    needs: npm
-    if: github.repository == 'Continuous-Actions/go-tokenless' && github.event_name == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - run: corepack enable && yarn install --immutable && yarn build
-      - name: Pack the npm tarball
-        run: npm pack
-      - id: attest
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: go-tokenless-*.tgz
-      - name: Attach tarball and signed provenance to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
-          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
-        run: |
-          TGZ=$(ls go-tokenless-*.tgz)
-          cp "$BUNDLE" "$TGZ.intoto.jsonl"
-          gh release upload "$TAG" "$TGZ" "$TGZ.intoto.jsonl" --repo "$GITHUB_REPOSITORY" --clobber
