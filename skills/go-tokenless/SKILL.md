@@ -22,4 +22,5 @@ description: Migrate npm publishing in GitHub Actions from NPM_TOKEN / NODE_AUTH
 Rules:
 - Don't hand-edit workflows to add `NODE_AUTH_TOKEN: ""` or similar: any token value, even empty, stops npm from using OIDC.
 - Trusted publishing works only on GitHub-hosted runners and needs npm 11.5.1+ (Node 24 ships it). The inserted upgrade step is pinned to `npm@^12`; only pass `--npm-version` if the user asks, and relay the warning it produces. Use `--npm-args "<args>"` for extra npm flags such as a registry mirror.
+- If installs need private packages from the user's npm org, add `--read-token NPM_READ_TOKEN` (any secret name). Install steps get a read-only token; publish steps stay tokenless. Tell the user to create a read-only granular token and `gh secret set` it.
 - An MCP server is available as `npx -y go-tokenless mcp` with tools `plan_trusted_publishing` and `apply_trusted_publishing` (argument `path`: absolute repo root).

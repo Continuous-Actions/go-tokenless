@@ -358,3 +358,71 @@ jobs:
     expect(plan(root).plan.findings.map((f: any) => f.code)).toContain('node-too-old-for-npm-12');
   });
 });
+
+describe('read-only install token', () => {
+  const WF = `on: push
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Install docs deps
+        run: pnpm install --frozen-lockfile
+        env:
+          CI: true
+      - run: npm install -g npm@^12
+      - run: npm publish
+`;
+  const files = { '.github/workflows/release.yml': WF, 'package.json': pkg({ name: '@acme/app', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) };
+
+  it('without the flag, removes the token everywhere and says nothing extra', () => {
+    const root = makeRepo(files);
+    const p = plan(root).plan;
+    expect(p.findings.filter((f: any) => f.level === 'warning')).toEqual([]);
+    run(root, 'apply');
+    expect(read(root, '.github/workflows/release.yml')).not.toContain('NODE_AUTH_TOKEN');
+  });
+
+  it('gives install steps the read-only token, never the publish step', () => {
+    const root = makeRepo(files);
+    const p = plan(root, '--read-token', 'NPM_READ_TOKEN').plan;
+    expect(p.nextSteps.join('\n')).toContain('gh secret set NPM_READ_TOKEN');
+    expect(p.nextSteps.join('\n')).toContain('gh secret delete NPM_TOKEN');
+    run(root, 'apply', '--read-token', 'NPM_READ_TOKEN');
+    expect(read(root, '.github/workflows/release.yml')).toBe(`on: push
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_READ_TOKEN }}
+      - name: Install docs deps
+        run: pnpm install --frozen-lockfile
+        env:
+          CI: true
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_READ_TOKEN }}
+      - run: npm install -g npm@^12
+      - run: npm publish
+`);
+    expect(plan(root, '--read-token', 'NPM_READ_TOKEN').plan.status).toBe('already-tokenless');
+    expect(plan(root).plan.status).toBe('already-tokenless');
+  });
+
+  it('rejects a bad secret name', () => {
+    expect(run(makeRepo(files), '--read-token', 'secrets.X').code).toBe(2);
+  });
+});

@@ -1,0 +1,19 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+const json = (f: string) => JSON.parse(readFileSync(f, 'utf8'));
+
+describe('release manifests', () => {
+  it('all carry the package.json version', () => {
+    const { version } = json('package.json');
+    const server = json('server.json');
+    expect(server.version).toBe(version);
+    expect(server.packages.map((p: any) => p.version)).toEqual([version]);
+    expect(json('.claude-plugin/plugin.json').version).toBe(version);
+    expect(json('gemini-extension.json').version).toBe(version);
+  });
+
+  it('use the npm mcpName as the registry name', () => {
+    expect(json('server.json').name).toBe(json('package.json').mcpName);
+  });
+});

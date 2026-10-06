@@ -13,6 +13,7 @@ const input = z.object({
   offline: z.boolean().optional().describe('Skip npm registry lookups.'),
   npmVersion: z.string().optional().describe('npm version range for the inserted upgrade step. Default ^12; other versions may break publishing.'),
   npmArgs: z.string().optional().describe('Extra arguments appended to the npm commands it generates.'),
+  readToken: z.string().optional().describe('Secret name (e.g. NPM_READ_TOKEN) of a read-only npm token to give install steps, for private org packages. Publish steps stay tokenless.'),
 });
 
 const result = (plan: Plan) => ({
@@ -29,14 +30,14 @@ export function serve(version: string) {
         'Read-only. Finds GitHub Actions workflows that publish to npm with a token (NPM_TOKEN / NODE_AUTH_TOKEN) and returns the exact changes needed to switch to npm trusted publishing (OIDC): workflow diff, package.json repository fixes, `npm trust github` commands, and the remaining human steps. Use before apply_trusted_publishing.',
       inputSchema: input,
       annotations: { readOnlyHint: true, openWorldHint: true },
-    }, async ({ path, repo, offline, npmVersion, npmArgs }) => result((await buildPlan(resolve(path), { repo, offline, npmVersion, npmArgs })).plan));
+    }, async ({ path, repo, offline, npmVersion, npmArgs, readToken }) => result((await buildPlan(resolve(path), { repo, offline, npmVersion, npmArgs, readToken })).plan));
     server.registerTool('apply_trusted_publishing', {
       title: 'Apply npm trusted publishing migration',
       description:
         'Writes the workflow and package.json changes from plan_trusted_publishing to disk (no git commit, no network writes). Returns the plan with status "applied" and the steps the user must still do with npm 2FA (npm trust commands, deleting the NPM_TOKEN secret).',
       inputSchema: input,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-    }, async ({ path, repo, offline, npmVersion, npmArgs }) => result(await applyPlan(resolve(path), { repo, offline, npmVersion, npmArgs })));
+    }, async ({ path, repo, offline, npmVersion, npmArgs, readToken }) => result(await applyPlan(resolve(path), { repo, offline, npmVersion, npmArgs, readToken })));
     return server;
   });
 }

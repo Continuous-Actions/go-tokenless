@@ -47,6 +47,8 @@ export type NpmOptions = {
   npmVersion: string;
   /** Extra arguments appended to the npm commands go-tokenless generates. */
   npmArgs?: string;
+  /** Secret holding a read-only npm token for install steps (private packages). */
+  readTokenSecret?: string;
 };
 const DEFAULT_NPM: NpmOptions = { npmVersion: DEFAULT_NPM_VERSION };
 
@@ -209,7 +211,25 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
         tokenRefs++;
       }
     }
-    tokenRefs += removeTokens(get(job, 'env'), 'job env', getPair(job, 'env'));
+    const jobEnvRemoved = removeTokens(get(job, 'env'), 'job env', getPair(job, 'env'));
+    tokenRefs += jobEnvRemoved;
+
+    // Installs of private packages still need a (read-only) token; publishing must not have one.
+    const installEdits: TextEdit[] = [];
+    const publishSet = new Set(publishSteps.map((x) => x.s));
+    const installSteps = stepMaps.filter((s) => isInstallRun(str(get(s, 'run')) ?? '') && !publishSet.has(s));
+    for (const s of npm.readTokenSecret ? publishSteps.map((x) => x.s).filter((s) => isInstallRun(str(get(s, 'run')) ?? '')) : []) {
+      add({ level: 'warning', line: lineOf(s), code: 'install-and-publish-in-one-step', message: `Job \`${jobId}\` installs and publishes in the same step. If the install needs private packages, split it into its own step so it can get a read-only token without blocking OIDC on publish.` });
+    }
+    if (npm.readTokenSecret) {
+      const value = `\${{ secrets.${npm.readTokenSecret} }}`;
+      for (const s of installSteps) {
+        const env = get(s, 'env');
+        if (getPair(env, 'NODE_AUTH_TOKEN')) continue; // already has one
+        installEdits.push(isMap(env) ? addPair(src, env, 'NODE_AUTH_TOKEN', value, { unit }) : addPair(src, s, 'env', { NODE_AUTH_TOKEN: value }, { unit }));
+        changes.push(`${jobId}: give step "${str(get(s, 'name')) ?? str(get(s, 'run'))?.split('\n')[0]}" the read-only token \`${npm.readTokenSecret}\` for private packages`);
+      }
+    }
     // Steps that only write a token into .npmrc are deleted; mixed scripts are flagged.
     for (const s of stepMaps) {
       const run = str(get(s, 'run'));
@@ -325,11 +345,11 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
       if (note) add({ level: note.level, line: jobLine, code: `tool-${t}`, message: `Job \`${jobId}\`: ${note.message}` });
     }
 
-    plan.alreadyTokenless = jobHasId && tokenRefs === 0 && setupEdits.length === 0;
+    plan.alreadyTokenless = jobHasId && tokenRefs === 0 && setupEdits.length === 0 && installEdits.length === 0;
     if (plan.alreadyTokenless) {
       add({ level: 'ok', line: jobLine, code: 'already-tokenless', message: `Job \`${jobId}\` already publishes with trusted publishing.` });
     } else if (!plan.blocked) {
-      edits.push(...tokenEdits, ...permEdits, ...setupEdits);
+      edits.push(...tokenEdits, ...permEdits, ...setupEdits, ...installEdits);
     }
     if (tokenRefs === 0 && !plan.alreadyTokenless && !jobHasId) {
       add({ level: 'info', line: jobLine, code: 'no-token-found', message: `Job \`${jobId}\` publishes but no npm token reference was found in the workflow. It may come from a repo-level .npmrc or an outer script.` });
@@ -382,6 +402,11 @@ const TOOL_NOTES: Partial<Record<PublishTool, { level: Finding['level']; message
   'release-it': { level: 'warning', message: 'release-it needs `npm.skipChecks: true` in its config, because its pre-publish auth check expects a token.' },
   np: { level: 'warning', message: '`np` is interactive and normally runs locally. Trusted publishing only applies to CI publishes.' },
 };
+
+/** A run script that installs dependencies (not a global npm upgrade). */
+export function isInstallRun(run: string): boolean {
+  return run.split('\n').some((l) => /^\s*(npm\s+(ci|i|install)|pnpm\s+(i|install)|yarn(\s+install)?|bun\s+install)(\s|$)/.test(l) && !/\s(-g|--global)(\s|$)/.test(l));
+}
 
 /** Static values for a `${{ matrix.key }}` expression, when the matrix lists them. */
 function matrixValues(matrix: unknown, expr: string): string[] | undefined {

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `--read-token <SECRET>` (MCP: `readToken`) gives install steps a read-only `NODE_AUTH_TOKEN` for private org packages; publish steps stay tokenless.
+- README rewritten with a header image, badges, agent setup for Claude Code, Gemini CLI and MCP clients, and a troubleshooting table.
+- Release workflow: a manual MCP Registry run is limited to `main` and checks the version is on npm. A test keeps `server.json`, the plugin and the Gemini manifest versions in step with `package.json`.
+- OpenSSF Scorecard workflow.
+
 - The inserted npm upgrade step is pinned to `npm@^12` (was `^11.5.1`).
 - `--npm-version <range>` overrides it, with a warning; versions below 11.5.1 are refused.
 - `--npm-args "<args>"` appends extra arguments to the npm upgrade step and the `npm trust` commands. Both options are also MCP tool inputs.

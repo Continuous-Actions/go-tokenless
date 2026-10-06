@@ -8,8 +8,8 @@ Use it when a user wants to remove an npm token from CI, set up trusted publishi
 
 - `npx -y go-tokenless` (plan, read-only; add `--json` for machine output with `status`, `changes`, `diff`, `findings`, `trust`, `nextSteps`)
 - `npx -y go-tokenless apply` (write the changes)
-- `npx -y go-tokenless mcp` (MCP server over stdio; tools `plan_trusted_publishing`, `apply_trusted_publishing`, input `{ path, repo?, offline?, npmVersion?, npmArgs? }`)
-- `--npm-version <range>` overrides the npm installed by the upgrade step (default `^12`; other versions trigger a warning, below 11.5.1 is refused). `--npm-args "<args>"` appends extra arguments to every generated npm command.
+- `npx -y go-tokenless mcp` (MCP server over stdio; tools `plan_trusted_publishing`, `apply_trusted_publishing`, input `{ path, repo?, offline?, npmVersion?, npmArgs?, readToken? }`)
+- `--npm-version <range>` overrides the npm installed by the upgrade step (default `^12`; other versions trigger a warning, below 11.5.1 is refused). `--npm-args "<args>"` appends extra arguments to every generated npm command. `--read-token <SECRET>` gives install steps (`npm ci`, `pnpm install`, ...) a read-only `NODE_AUTH_TOKEN` from that secret for private org packages, while publish steps stay tokenless.
 
 Exit codes: 0 ok, 1 blocked (errors need a human), 2 usage error, 3 unexpected error.
 

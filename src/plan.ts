@@ -54,6 +54,8 @@ export type PlanOptions = {
   npmVersion?: string;
   /** Extra arguments appended to every npm command go-tokenless generates. */
   npmArgs?: string;
+  /** Secret name holding a read-only npm token, given to install steps for private packages. */
+  readToken?: string;
 };
 
 /** Throws a usage error for npm options that would produce a broken workflow. */
@@ -63,6 +65,9 @@ export function checkNpmOptions(opts: PlanOptions): void {
   }
   if (opts.npmArgs !== undefined && (/[\r\n]/.test(opts.npmArgs) || /\$\{\{/.test(opts.npmArgs))) {
     throw new UsageError('--npm-args must be a single line without ${{ }} expressions');
+  }
+  if (opts.readToken !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(opts.readToken)) {
+    throw new UsageError(`--read-token must be a secret name such as NPM_READ_TOKEN, got "${opts.readToken}"`);
   }
 }
 
@@ -75,7 +80,7 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
   const findings: Finding[] = [];
   const files = new Map<string, string>();
   const slug = opts.repo ?? remoteSlug(root);
-  const npm: NpmOptions = { npmVersion: opts.npmVersion?.trim() || DEFAULT_NPM_VERSION, npmArgs: opts.npmArgs?.trim() || undefined };
+  const npm: NpmOptions = { npmVersion: opts.npmVersion?.trim() || DEFAULT_NPM_VERSION, npmArgs: opts.npmArgs?.trim() || undefined, readTokenSecret: opts.readToken };
   const extraArgs = npm.npmArgs ? ` ${npm.npmArgs}` : '';
   const packages = findPackages(root);
   const rootScripts = packages.find((p) => p.dir === '.')?.scripts ?? {};
@@ -179,7 +184,7 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
     changes,
     findings,
     trust,
-    nextSteps: nextSteps(status, trust, secrets, slug),
+    nextSteps: nextSteps(status, trust, secrets, slug, opts.readToken),
     diff: [...files].map(([f, after]) => unifiedDiff(f, readFileSync(join(root, f), 'utf8'), after)).join(''),
   };
   return { plan, files };
@@ -191,10 +196,10 @@ export async function applyPlan(root: string, opts: PlanOptions = {}): Promise<P
   if (plan.status !== 'ready' && !(plan.status === 'blocked' && files.size > 0)) return plan;
   for (const [f, text] of files) writeFileSync(join(root, f), text);
   const status: Status = plan.status === 'blocked' ? 'blocked' : 'applied';
-  return { ...plan, status, nextSteps: nextSteps(status, plan.trust, [...new Set(plan.workflows.flatMap((w) => w.secrets))], plan.repository) };
+  return { ...plan, status, nextSteps: nextSteps(status, plan.trust, [...new Set(plan.workflows.flatMap((w) => w.secrets))], plan.repository, opts.readToken) };
 }
 
-function nextSteps(status: Status, trust: TrustCommand[], secrets: string[], slug?: string): string[] {
+function nextSteps(status: Status, trust: TrustCommand[], secrets: string[], slug?: string, readToken?: string): string[] {
   if (status === 'no-publish-workflow') return ['No GitHub Actions workflow in this repo publishes to npm. Nothing to migrate.'];
   if (status === 'already-tokenless') {
     return secrets.length > 0 ? [`Delete the unused secret${secrets.length > 1 ? 's' : ''}: ${secrets.map((s) => `\`gh secret delete ${s}\``).join(', ')}.`] : ['Already using trusted publishing. Nothing to do.'];
@@ -207,8 +212,12 @@ function nextSteps(status: Status, trust: TrustCommand[], secrets: string[], slu
   if (trust.length > 0) {
     steps.push(`Add a trusted publisher for each package. With npm 11.15+ logged in with 2FA, run:\n${trust.map((t) => `    ${t.command}`).join('\n')}\n  Or on npmjs.com: package → Settings → Trusted publishing → GitHub Actions${slug ? ` (repository ${slug})` : ''}.`);
   }
+  if (readToken && (status === 'ready' || status === 'applied')) {
+    steps.push(`Create a read-only granular npm token (Packages and scopes: read-only, for your org's private packages) and save it as the \`${readToken}\` secret: \`gh secret set ${readToken}\`.`);
+  }
   steps.push('Merge, then let the release workflow publish once. Check the new version shows a provenance badge on npmjs.com.');
-  if (secrets.length > 0) steps.push(`Delete the old secret${secrets.length > 1 ? 's' : ''} (${secrets.map((s) => `\`gh secret delete ${s}\``).join(', ')}) and revoke the token on npmjs.com → Access Tokens.`);
+  const old = secrets.filter((s) => s !== readToken);
+  if (old.length > 0) steps.push(`Delete the old publish token secret${old.length > 1 ? 's' : ''} (${old.map((s) => `\`gh secret delete ${s}\``).join(', ')}) and revoke the token on npmjs.com → Access Tokens.`);
   steps.push('Optional: in each package\'s npm settings choose "Require two-factor authentication and disallow tokens".');
   return steps;
 }
