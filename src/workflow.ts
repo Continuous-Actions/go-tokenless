@@ -405,7 +405,10 @@ const TOOL_NOTES: Partial<Record<PublishTool, { level: Finding['level']; message
 
 /** A run script that installs dependencies (not a global npm upgrade). */
 export function isInstallRun(run: string): boolean {
-  return run.split('\n').some((l) => /^\s*(npm\s+(ci|i|install)|pnpm\s+(i|install)|yarn(\s+install)?|bun\s+install)(\s|$)/.test(l) && !/\s(-g|--global)(\s|$)/.test(l));
+  // Bare `yarn` installs, but `yarn build` does not: after `yarn`/`yarn install` only flags may follow.
+  const yarn = /^\s*yarn(\s+install)?(\s+-[\w-]+(=\S+)?)*\s*($|&&|;|\|)/;
+  const other = /^\s*(npm\s+(ci|i|install)|pnpm\s+(i|install)|bun\s+install)(\s|$)/;
+  return run.split('\n').some((l) => (yarn.test(l) || other.test(l)) && !/\s(-g|--global)(\s|$)/.test(l));
 }
 
 /** Static values for a `${{ matrix.key }}` expression, when the matrix lists them. */

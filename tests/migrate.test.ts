@@ -426,3 +426,25 @@ jobs:
     expect(run(makeRepo(files), '--read-token', 'secrets.X').code).toBe(2);
   });
 });
+
+describe('install step detection', () => {
+  it('gives the read token only to real install commands', () => {
+    const steps = ['yarn', 'yarn install --immutable', 'yarn --frozen-lockfile', 'yarn build', 'yarn test --coverage', 'yarn npm publish', 'npm ci', 'npm run build', 'pnpm i', 'pnpm run lint', 'npm install -g npm@^12', 'bun install'];
+    const wf = `on: push
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+${steps.map((s) => `      - run: ${s}`).join('\n')}
+`;
+    const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) });
+    const changed = plan(root, '--read-token', 'NPM_READ_TOKEN').plan.changes.map((c: any) => c.description).filter((d: string) => d.includes('read-only token'));
+    expect(changed.map((d: string) => d.match(/step "([^"]+)"/)![1])).toEqual(['yarn', 'yarn install --immutable', 'yarn --frozen-lockfile', 'npm ci', 'pnpm i', 'bun install']);
+  });
+});
