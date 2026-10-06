@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Continuous-Actions/go-tokenless/main/docs/assets/header.png" alt="go-tokenless: removes NODE_AUTH_TOKEN from a release workflow and adds id-token: write" width="100%">
+  <img src="https://raw.githubusercontent.com/continuous-actions/go-tokenless/main/docs/assets/header.png" alt="go-tokenless: removes NODE_AUTH_TOKEN from a release workflow and adds id-token: write" width="100%">
 </p>
 
 # go-tokenless
 
-[![CI](https://github.com/Continuous-Actions/go-tokenless/actions/workflows/ci.yml/badge.svg)](https://github.com/Continuous-Actions/go-tokenless/actions/workflows/ci.yml)
+[![CI](https://github.com/continuous-actions/go-tokenless/actions/workflows/ci.yml/badge.svg)](https://github.com/continuous-actions/go-tokenless/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/go-tokenless?logo=npm)](https://www.npmjs.com/package/go-tokenless)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-go--tokenless-blue)](https://registry.modelcontextprotocol.io/v0/servers?search=go-tokenless)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Continuous-Actions/go-tokenless/badge)](https://scorecard.dev/viewer/?uri=github.com/Continuous-Actions/go-tokenless)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/continuous-actions/go-tokenless/badge)](https://scorecard.dev/viewer/?uri=github.com/continuous-actions/go-tokenless)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 **Delete your `NPM_TOKEN`.** One command switches npm publishing in GitHub Actions to [trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC). No long-lived token is stored anywhere, and every release gets a provenance badge.
@@ -131,17 +131,17 @@ go-tokenless is built to be run by coding agents: `--json` output, clear exit co
 | Client | Setup |
 |---|---|
 | Claude directory (claude.ai, Cowork, Claude Code) | Submitted to [Anthropic's plugin directory](https://claude.ai/directory) and awaiting approval. Once listed: open the directory, search **go-tokenless** and select **Add**. It then syncs to Claude Code as `go-tokenless@synced`. Until then, use the marketplace command below |
-| Claude Code (plugin: skill + MCP) | `/plugin marketplace add Continuous-Actions/go-tokenless` then `/plugin install go-tokenless@continuous-actions` |
+| Claude Code (plugin: skill + MCP) | `/plugin marketplace add continuous-actions/go-tokenless` then `/plugin install go-tokenless@continuous-actions` |
 | Claude Code (MCP only) | `claude mcp add go-tokenless -- npx -y go-tokenless mcp` |
-| Gemini CLI | `gemini extensions install https://github.com/Continuous-Actions/go-tokenless` |
+| Gemini CLI | `gemini extensions install https://github.com/continuous-actions/go-tokenless` |
 | Cursor, VS Code, others | Add the MCP config below |
-| Any agent with skills | `npx skills add Continuous-Actions/go-tokenless` |
+| Any agent with skills | `npx skills add continuous-actions/go-tokenless` |
 
 ```json
 { "mcpServers": { "go-tokenless": { "command": "npx", "args": ["-y", "go-tokenless", "mcp"] } } }
 ```
 
-MCP tools: `plan_trusted_publishing` (read-only) and `apply_trusted_publishing` (writes files; no git or network writes). It is listed in the [MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=go-tokenless) as `io.github.Continuous-Actions/go-tokenless`. See also [llms.txt](llms.txt) and the [Agent Skill](skills/go-tokenless/SKILL.md).
+MCP tools: `plan_trusted_publishing` (read-only) and `apply_trusted_publishing` (writes files; no git or network writes). It is listed in the [MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=go-tokenless) as `io.github.continuous-actions/go-tokenless`. See also [llms.txt](llms.txt) and the [Agent Skill](skills/go-tokenless/SKILL.md).
 
 ## Options
 
@@ -194,4 +194,4 @@ Issues and pull requests are welcome. Run `corepack enable && yarn install && ya
 
 ## License
 
-[MIT](LICENSE) © Continuous-Actions
+[MIT](LICENSE) © continuous-actions

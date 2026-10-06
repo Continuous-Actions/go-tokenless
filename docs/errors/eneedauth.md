@@ -29,6 +29,6 @@ In a GitHub Actions release that uses [trusted publishing](https://docs.npmjs.co
 npx go-tokenless
 ```
 
-[go-tokenless](https://github.com/Continuous-Actions/go-tokenless) reads your workflows and lists exactly what's missing: the permission, the npm version, `registry-url`, leftover tokens and `repository.url`. `npx go-tokenless apply` fixes them.
+[go-tokenless](https://github.com/continuous-actions/go-tokenless) reads your workflows and lists exactly what's missing: the permission, the npm version, `registry-url`, leftover tokens and `repository.url`. `npx go-tokenless apply` fixes them.
 
 [← All errors](../)

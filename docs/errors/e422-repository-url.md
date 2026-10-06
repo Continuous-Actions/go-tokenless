@@ -33,6 +33,6 @@ With provenance (automatic under trusted publishing), npm checks that `package.j
 npx go-tokenless apply
 ```
 
-[go-tokenless](https://github.com/Continuous-Actions/go-tokenless) adds or fixes `repository` in every publishable package. It only rewrites shorthands and missing fields, and edits only that property's text. If `repository` points at a different repo, it stops and reports it instead.
+[go-tokenless](https://github.com/continuous-actions/go-tokenless) adds or fixes `repository` in every publishable package. It only rewrites shorthands and missing fields, and edits only that property's text. If `repository` points at a different repo, it stops and reports it instead.
 
 [← All errors](../)

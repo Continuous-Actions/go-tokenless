@@ -16,7 +16,7 @@ npx go-tokenless          # preview: lists every change and shows a diff, writes
 npx go-tokenless apply    # makes the changes and prints the npm trust commands
 ```
 
-[go-tokenless](https://github.com/Continuous-Actions/go-tokenless) (MIT) edits only the lines that need changing. It refuses unsafe cases instead of guessing:
+[go-tokenless](https://github.com/continuous-actions/go-tokenless) (MIT) edits only the lines that need changing. It refuses unsafe cases instead of guessing:
 
 - self-hosted runners
 - publish jobs reachable from `pull_request_target` or `issue_comment`
@@ -47,4 +47,4 @@ npx go-tokenless apply    # makes the changes and prints the npm trust commands
 claude mcp add go-tokenless -- npx -y go-tokenless mcp
 ```
 
-It's also a Claude Code plugin, a Gemini CLI extension and an Agent Skill. See the [README](https://github.com/Continuous-Actions/go-tokenless#use-it-with-ai-agents).
+It's also a Claude Code plugin, a Gemini CLI extension and an Agent Skill. See the [README](https://github.com/continuous-actions/go-tokenless#use-it-with-ai-agents).

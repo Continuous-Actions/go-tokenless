@@ -9,7 +9,7 @@ The plugin gives Claude an Agent Skill and an MCP server. Ask *"Move our npm pub
 
 ## What it runs and accesses
 
-- **MCP server:** started with `npx -y go-tokenless@<pinned version> mcp`, the published [go-tokenless](https://www.npmjs.com/package/go-tokenless) npm package. Its source is at https://github.com/Continuous-Actions/go-tokenless.
+- **MCP server:** started with `npx -y go-tokenless@<pinned version> mcp`, the published [go-tokenless](https://www.npmjs.com/package/go-tokenless) npm package. Its source is at https://github.com/continuous-actions/go-tokenless.
 - **Files:** it reads `.github/workflows/*.yml`, `package.json` files and scripts in the repository you point it at. The apply tool writes only to workflow and `package.json` files inside that repository, and never follows links out of it.
 - **Network:** read-only `GET` requests to `https://registry.npmjs.org/<package>`, to check that each package already exists (the `offline` option turns this off). Nothing else is fetched or sent. There is no telemetry.
 - **Never:** it doesn't run repository code, read secrets or environment tokens, change git state, or contact npm or GitHub on your behalf.
@@ -19,4 +19,4 @@ The plugin gives Claude an Agent Skill and an MCP server. Ask *"Move our npm pub
 - `plan_trusted_publishing`: read-only. Returns the plan, the diff, the trust commands and the next steps.
 - `apply_trusted_publishing`: writes the planned file changes.
 
-Full documentation: https://github.com/Continuous-Actions/go-tokenless#readme. License: MIT.
+Full documentation: https://github.com/continuous-actions/go-tokenless#readme. License: MIT.
