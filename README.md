@@ -14,6 +14,22 @@
 
 > npm is retiring token publishing: from **January 2027** a token can no longer publish on its own ([npm docs](https://docs.npmjs.com/about-access-tokens/)).
 
+<!-- toc -->
+**Contents**
+
+- [Quick start](#quick-start)
+- [What it changes](#what-it-changes)
+- [Supported release setups](#supported-release-setups)
+- [Private packages](#private-packages)
+- [Use it with AI agents](#use-it-with-ai-agents)
+- [Options](#options)
+- [What it accesses](#what-it-accesses)
+- [What only you can do](#what-only-you-can-do)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
+<!-- /toc -->
+
 ## Quick start
 
 From the root of the repository that publishes to npm:
