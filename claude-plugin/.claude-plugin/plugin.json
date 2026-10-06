@@ -10,6 +10,9 @@
   },
   "homepage": "https://github.com/Continuous-Actions/go-tokenless",
   "repository": "https://github.com/Continuous-Actions/go-tokenless",
+  "documentationUrl": "https://github.com/Continuous-Actions/go-tokenless#readme",
+  "supportUrl": "https://github.com/Continuous-Actions/go-tokenless/issues",
+  "privacyPolicyUrl": "https://github.com/Continuous-Actions/go-tokenless/blob/main/PRIVACY.md",
   "license": "MIT",
   "keywords": [
     "npm",
