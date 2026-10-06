@@ -1,6 +1,50 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+### Security (from three adversarial review rounds)
+
+- **Untrusted triggers are blocked.** A publish job in a workflow started by `pull_request_target`, `issue_comment`, `workflow_run` or similar is never given `id-token: write` or a trust command.
+- **Dry runs don't count as publishing.** Neither does `npm publish --dry-run` or an `echo` line.
+- **Edits are checked by meaning.** Each edit is compared before and after with aliases resolved, and nothing is written if anything other than the migration would change. Workflows with YAML anchors are reported, not edited.
+- **`blocked` writes nothing.** Files are only read and written if they are regular files inside the repo: no `..` workspace globs, no symlinks.
+- **No injection:**
+  - trust commands shell-quote every value
+  - invalid npm package names are refused
+  - `--npm-version` takes only a version or a `^`/`~` range
+  - `--npm-args` takes only npm flags
+  - `repo` is validated for the MCP server too
+  - terminal control characters are stripped from output
+- **Token detection:**
+  - catches `secrets['X']`, `format(...)` and `YARN_NPM_AUTH_TOKEN`
+  - catches tokens passed to other steps of the publish job
+  - catches `npmAuthToken` written to `.yarnrc.yml`
+  - never reports "already tokenless" while one remains
+- **Registry check:** lookalike registry hosts (`registry.npmjs.org.evil.example`) are treated as other registries.
+- **Permissions:**
+  - `read-all` stays read-only
+  - jobs that create GitHub releases or push tags keep `contents: write`
+  - an inserted `actions/setup-node` is SHA-pinned when the job pins its actions
+- **`--read-token` set to the current publish secret** is flagged, with a rotate-and-revoke step.
+
+### Detection
+
+- **Publishes inside other files:** follows `./scripts/*.sh`, `make <target>` and local composite actions.
+- **More ways to run the tools:**
+  - `npx semantic-release@x`, `pnpm semantic-release` and `node_modules/.bin/...`
+  - `pnpm --filter=x publish`
+  - `changesets/action/publish`
+  - release-it actions
+- **`working-directory`** is used to find scripts and to pick the package for each trust command.
+- **Reusable workflows:** a trust command is printed for every caller.
+- **Already on OIDC:** jobs with `id-token: write` and no token are left alone, with no setup churn. `changesets/action` is no longer bumped to v2.
+- **Hidden publish commands:** a workflow that passes an npm token but whose publish command can't be found is reported (`publish-not-found`) instead of "nothing to migrate".
+- **GitHub Packages:** `GITHUB_TOKEN` values and GitHub Packages `.npmrc` lines are kept.
+- **Unparsable workflows** are reported.
+- **`package.json` edits** change only the `repository` text: key order, numbers and escapes are kept, and a BOM is handled.
+
+### Other
+
 
 - `--read-token <SECRET>` (MCP: `readToken`) gives install steps a read-only `NODE_AUTH_TOKEN` for private org packages; publish steps stay tokenless.
 - README rewritten with a header image, badges, agent setup for Claude Code, Gemini CLI and MCP clients, and a troubleshooting table.

@@ -27,19 +27,27 @@ Then follow the **Next** steps it prints: commit the change, connect the package
 
 ## What it changes
 
-Only the lines that need to change are touched. Comments, quoting and layout are kept.
+Only the lines that need to change are touched: comments, quoting and layout in your workflows are kept, and in `package.json` only the `repository` field is edited. Before writing, go-tokenless re-reads both versions and refuses if anything other than the migration would change.
 
 | Problem in your release workflow | What go-tokenless does |
 |---|---|
-| `NODE_AUTH_TOKEN` / `NPM_TOKEN` on the publish step or job | Removes it. Any token, even an empty one, stops npm from using OIDC |
+| `NODE_AUTH_TOKEN` / `NPM_TOKEN` on the publish job (or the workflow) | Removes it, so the secret can be deleted. npm prefers OIDC but falls back to a configured token, which would keep the old token in use |
 | Job can't request an OIDC token | Adds `permissions: id-token: write`, keeping the permissions it had |
 | npm older than 11.5.1 (Node 22 and below) | Adds `npm install -g npm@^12`, or moves Node < 22 to 24 |
 | `actions/setup-node` without `registry-url` | Adds `registry-url: https://registry.npmjs.org` |
-| `changesets/action@v1`, `JS-DevTools/npm-publish@v3` | Updates them to versions that support trusted publishing |
+| `JS-DevTools/npm-publish` below v4 | Updates it to v4, which no longer requires a token |
 | A script writes `_authToken` to `.npmrc` | Removes those lines |
 | `repository` missing or in the wrong form in `package.json` | Sets `git+https://github.com/<owner>/<repo>.git` (with `directory` in monorepos) |
 
-It stops with exit code `1` instead of guessing when trusted publishing can't work, such as on a self-hosted runner or when `repository` points at another repo. Jobs that publish to GitHub Packages are left alone.
+It stops with exit code `1` and writes nothing when a person needs to decide:
+
+- **Publishing reachable by outsiders:** a publish job in a workflow started by `pull_request_target`, `issue_comment`, `workflow_run` and similar triggers. Granting it OIDC would let a fork publish.
+- **Self-hosted runners**, which npm doesn't accept for trusted publishing.
+- **`repository` pointing at another repo.**
+- **YAML anchors.** Edits could leak into other jobs.
+- **A hidden publish command:** an npm token is passed but the publish command can't be found.
+
+Dry runs (`npm publish --dry-run`) never count as publishing. Steps that publish to GitHub Packages, and `GITHUB_TOKEN` values, are left alone.
 
 <details>
 <summary><b>Example output</b></summary>
@@ -73,13 +81,14 @@ Next:
 | `npm publish` (incl. workspaces) | |
 | pnpm `publish` / `-r publish` | pnpm 10 hands off to npm; pnpm 11 needs 11.1.3+ |
 | Yarn Berry `yarn npm publish` | Yarn 4.10.3+; remove `npmAuthToken` from `.yarnrc.yml` |
-| changesets (`changesets/action`) | Updated to v2 |
+| changesets (`changesets/action`) | Works as is; if the first tokenless release can't authenticate, update to v2 |
 | semantic-release | Needs @semantic-release/npm 13.1.0+ (semantic-release 25+) |
 | release-please + `npm publish` | |
 | Lerna / Nx release | Lerna 9+ |
 | JS-DevTools/npm-publish | Updated to v4 |
 | release-it | Also set `npm.skipChecks: true` |
-| Reusable workflows (`workflow_call`) | npm checks the *calling* workflow's file name; the plan uses it |
+| Reusable workflows (`workflow_call`) | npm checks the *calling* workflow's file name; a trust command is printed for every caller |
+| Publishing inside scripts | Follows package.json scripts, `./scripts/*.sh`, `make <target>` and local composite actions (`uses: ./.github/actions/...`), including `working-directory` |
 | Yarn 1 `yarn publish`, `bun publish` | Flagged: those tools can't use trusted publishing yet, so switch to `npm publish` |
 
 ## Private packages
@@ -97,7 +106,7 @@ npx go-tokenless apply --read-token NPM_READ_TOKEN
        - run: npm publish
 ```
 
-Create a granular token on npmjs.com with read-only access to your packages and save it with `gh secret set NPM_READ_TOKEN`.
+Every install step in the release workflow gets it, including separate build and test jobs. Create a granular token on npmjs.com with read-only access to your packages and save it with `gh secret set NPM_READ_TOKEN`.
 
 ## Use it with AI agents
 

@@ -11,7 +11,7 @@ description: Migrate npm publishing in GitHub Actions from NPM_TOKEN / NODE_AUTH
    - `ready`: changes are listed in `changes` and `diff`.
    - `already-tokenless`: nothing to change; see `nextSteps`.
    - `no-publish-workflow`: no workflow publishes to npm. Stop.
-   - `blocked`: `findings` with `level: "error"` must be fixed first (self-hosted runner, `repository` pointing at another repo). Explain them to the user; do not work around them.
+   - `blocked`: `findings` with `level: "error"` must be fixed first. Examples: `untrusted-trigger` (publishing from pull_request_target/issue_comment/workflow_run), `self-hosted-runner`, `repository-mismatch`, `yaml-anchors`, `publish-not-found`. Nothing was written. Explain them to the user; never work around `untrusted-trigger` by granting `id-token: write` yourself.
 2. **Apply:** `npx -y go-tokenless apply`. It edits only the needed lines in `.github/workflows/*.yml` and `package.json` files. Show the user the diff (`git diff`) and commit on a branch.
 3. **Hand the user the remaining steps from `nextSteps` verbatim.** They need the user's npm account with 2FA, so never try to do them yourself:
    - run each `trust[].command` (`npm trust github <pkg> --repo <owner/repo> --file <workflow.yml> --allow-publish --yes`), or use npmjs.com → package → Settings → Trusted publishing;
@@ -20,7 +20,7 @@ description: Migrate npm publishing in GitHub Actions from NPM_TOKEN / NODE_AUTH
 4. Surface every `warning` finding to the user (for example tool versions that are too old, `bun publish`, or a reusable workflow whose caller needs `id-token: write`).
 
 Rules:
-- Don't hand-edit workflows to add `NODE_AUTH_TOKEN: ""` or similar: any token value, even empty, stops npm from using OIDC.
+- Don't leave or add `NODE_AUTH_TOKEN` on publish steps: npm falls back to a configured token, so the old token stays in use and can't be deleted.
 - Trusted publishing works only on GitHub-hosted runners and needs npm 11.5.1+ (Node 24 ships it). The inserted upgrade step is pinned to `npm@^12`; only pass `--npm-version` if the user asks, and relay the warning it produces. Use `--npm-args "<args>"` for extra npm flags such as a registry mirror.
 - If installs need private packages from the user's npm org, add `--read-token NPM_READ_TOKEN` (any secret name). Install steps get a read-only token; publish steps stay tokenless. Tell the user to create a read-only granular token and `gh secret set` it.
 - An MCP server is available as `npx -y go-tokenless mcp` with tools `plan_trusted_publishing` and `apply_trusted_publishing` (argument `path`: absolute repo root).

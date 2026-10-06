@@ -1,6 +1,6 @@
 {
   "name": "go-tokenless",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Switch npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC) with one command. CLI, MCP server and Agent Skill.",
   "license": "MIT",
   "type": "module",
