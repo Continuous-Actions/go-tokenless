@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 - GitHub Action (`uses: continuous-actions/go-tokenless@v1`): check mode fails CI when npm publishing still relies on a stored token, with annotations and a job summary listing the fixes; `mode: report` only annotates.
+- Error guides at https://continuous-actions.github.io/go-tokenless/ (ENEEDAUTH, E404 on PUT, E422 repository.url, leftover tokens, the 2FA-bypass notice), linked from the README and `llms.txt`.
+- The Claude plugin moved to `claude-plugin/`, with an icon and privacy, support and docs links. The project has a privacy policy (`PRIVACY.md`).
+- Lowercase org name `continuous-actions` in docs and links.
 
 ## 1.0.0
 

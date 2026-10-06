@@ -7,12 +7,12 @@
     "url": "https://github.com/Continuous-Actions/go-tokenless",
     "source": "github"
   },
-  "version": "1.0.0",
+  "version": "1.1.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "go-tokenless",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "transport": { "type": "stdio" },
       "packageArguments": [{ "type": "positional", "value": "mcp" }]
     }
