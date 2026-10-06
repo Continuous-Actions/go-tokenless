@@ -78,8 +78,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A release PR pins a version that is published only after the tag; skip until then.
+      - id: published
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "go-tokenless@$version" version >/dev/null 2>&1; then echo "yes=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::go-tokenless@$version is not on npm yet; skipping the self-check."; fi
       - uses: ./
+        if: steps.published.outputs.yes == 'true'
         id: check
-      - run: test "$STATUS" = already-tokenless
+      - if: steps.published.outputs.yes == 'true'
+        run: test "$STATUS" = already-tokenless
         env:
           STATUS: ${{ steps.check.outputs.status }}
