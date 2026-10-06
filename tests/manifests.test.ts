@@ -30,3 +30,10 @@ describe('Claude plugin folder', () => {
     expect(json('.claude-plugin/marketplace.json').plugins[0].source).toBe('./claude-plugin');
   });
 });
+
+describe('GitHub Action', () => {
+  it('pins the CLI to the package version', () => {
+    const { version } = json('package.json');
+    expect(readFileSync('action.yml', 'utf8')).toContain(`npx --yes go-tokenless@${version} `);
+  });
+});

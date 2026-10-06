@@ -21,6 +21,7 @@
 - [What it changes](#what-it-changes)
 - [Supported release setups](#supported-release-setups)
 - [Private packages](#private-packages)
+- [Keep it tokenless in CI](#keep-it-tokenless-in-ci)
 - [Use it with AI agents](#use-it-with-ai-agents)
 - [Options](#options)
 - [What it accesses](#what-it-accesses)
@@ -123,6 +124,27 @@ npx go-tokenless apply --read-token NPM_READ_TOKEN
 ```
 
 Every install step in the release workflow gets it, including separate build and test jobs. Create a granular token on npmjs.com with read-only access to your packages and save it with `gh secret set NPM_READ_TOKEN`.
+
+## Keep it tokenless in CI
+
+Add the Action to CI. It fails the job if a token creeps back into a publish workflow, and the job summary lists the exact fixes:
+
+```yaml
+# .github/workflows/ci.yml
+jobs:
+  tokenless:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: continuous-actions/go-tokenless@v1
+        # with:
+        #   mode: report               # annotate only, never fail
+        #   read-token: NPM_READ_TOKEN # if installs use a read-only token
+```
+
+It runs `go-tokenless --json` read-only and needs no token. Its `status` output is `already-tokenless`, `ready`, `blocked` or `no-publish-workflow`.
 
 ## Use it with AI agents
 
