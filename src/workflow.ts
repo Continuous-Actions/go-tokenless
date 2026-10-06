@@ -76,7 +76,14 @@ function commands(run: string): string[] {
     if (raw.length > 4000) continue; // generated blobs, not commands
     const line = raw.trim();
     if (!line || line.startsWith('#') || /^(echo|printf)\b/.test(line)) continue;
-    out.push(...line.split(/&&|\|\||;|\|/).map((c) => c.trim()).filter(Boolean));
+    // `$( … )` and `( … )` run commands too: treat their contents as separate commands.
+    const flat = line.replace(/\$\(|`/g, ' ; ').replace(/[()]/g, ' ; ');
+    for (let c of flat.split(/&&|\|\||;|\|/)) {
+      c = c.trim().replace(/\s+\d?>&?\d*\S*/g, ' ').trim();
+      // Shell keywords and assignments in front of the command.
+      for (let prev = ''; prev !== c; ) { prev = c; c = c.replace(/^(if|then|else|elif|do|while|until|!|\{|time|exec|\w+=\S*)\s+/, ''); }
+      if (c) out.push(c.replace(/["']/g, ''));
+    }
   }
   return out;
 }
@@ -127,8 +134,14 @@ export function toolsInRun(run: string, repo: Repo | ScriptLookup, depth = 0, di
       if (body) follow(body);
       else { const t2 = commandTool(m[1]!); if (t2 && t2 !== 'np') out.add(t2); }
     }
-    m = cmd.match(/^(?:(?:ba|z)?sh\s+|node\s+|\.\/)?((?:\.\/)?[\w./-]+\.(?:sh|bash|mjs|cjs|js))(\s|$)/);
-    if (m && !m[1]!.includes('..')) follow(r.read(join2(dir, m[1]!.replace(/^\.\//, ''))));
+    m = cmd.match(/^(?:(?:ba|z)?sh\s+|node\s+|\.\/)?((?:\.\/)?[\w./-]+\.(sh|bash|mjs|cjs|js))(\s|$)/);
+    if (m && !m[1]!.includes('..')) {
+      const body = r.read(join2(dir, m[1]!.replace(/^\.\//, '')));
+      if (body && /^(m|c)?js$/.test(m[2]!)) {
+        // A Node script that runs `npm publish` via child_process.
+        if (/\bnpm['"`]?\s*,\s*\[\s*['"`]publish['"`]|['"`]npm\s+publish\b/.test(body)) out.add('npm');
+      } else follow(body);
+    }
     m = cmd.match(/^make\s+(?:-\S+\s+)*([\w.-]+)/);
     if (m) follow(makeTarget(r.read(join2(dir, 'Makefile')), m[1]!));
   }

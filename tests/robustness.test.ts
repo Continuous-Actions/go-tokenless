@@ -178,3 +178,21 @@ describe('real-world detection (round C)', () => {
     expect(run(makeRepo({}), '--cwd', join(tmpdir(), 'does-not-exist-go-tokenless')).code).toBe(2);
   });
 });
+
+describe('more real-world shapes', () => {
+  const H = 'on: push\njobs:\n  rel:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - uses: actions/setup-node@v6\n        with:\n          node-version: 24\n          registry-url: https://registry.npmjs.org\n';
+  const P = pkg({ name: 'pkg-a', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } });
+  it('finds npm publish inside $( ) and if-statements', () => {
+    const wf = `${H}      - run: |\n          if ! out=$(npm publish --access public "$tarball" 2>&1); then exit 1; fi\n        env:\n          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}\n`;
+    expect(plan(makeRepo({ '.github/workflows/r.yml': wf, 'package.json': P })).plan.status).toBe('ready');
+  });
+  it('finds a Node script that runs npm publish', () => {
+    const wf = `${H}      - run: node scripts/publish.mjs dist\n        env:\n          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}\n`;
+    const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': P, 'scripts/publish.mjs': "import { execFileSync } from 'node:child_process';\nexecFileSync('npm', ['publish', '--access', 'public']);\n" });
+    expect(plan(root).plan.status).toBe('ready');
+  });
+  it('leaves GitHub Packages-only workflows alone, even with a custom secret', () => {
+    const wf = H.replace('https://registry.npmjs.org', 'https://npm.pkg.github.com/') + '      - uses: ./.github/actions/publish\n        env:\n          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_WRITE }}\n';
+    expect(plan(makeRepo({ '.github/workflows/r.yml': wf, 'package.json': P })).plan.status).toBe('no-publish-workflow');
+  });
+});

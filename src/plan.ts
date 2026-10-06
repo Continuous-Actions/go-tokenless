@@ -118,6 +118,9 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
   // (a script outside the repo, a third-party action): say so instead of "nothing to do".
   for (const [file, text] of texts) {
     if (workflows.some((w) => w.file === file)) continue; // publishing, or deliberately skipped (another registry)
+    // Workflows that only talk to another registry (e.g. GitHub Packages) are none of our business.
+    const registries = [...text.matchAll(/registry-url:\s*['"]?([^\s'"#]+)/g)].map((x) => x[1]!);
+    if (registries.length > 0 && !registries.some((u) => /registry\.npmjs\.org/.test(u))) continue;
     const m = text.match(/^\s*([A-Z_]*NPM[A-Z_]*TOKEN|NODE_AUTH_TOKEN|YARN_NPM_AUTH_TOKEN)\s*:\s*['"]?\$\{\{[^}]*\bsecrets\b/m);
     if (m && !/secrets\.GITHUB_TOKEN/.test(m[0])) {
       findings.push({ level: 'error', file, code: 'publish-not-found', message: `Passes \`${m[1]}\` from a secret, but go-tokenless could not find the command that publishes (it may be inside an action or a script it can't read). Migrate this workflow by hand: grant \`id-token: write\` to the publishing job and remove the token.` });
