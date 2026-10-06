@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    # ready_for_review and review_requested start the Claude review job.
+    types: [opened, synchronize, reopened, ready_for_review, review_requested]
   workflow_dispatch:
 
 permissions:
@@ -47,3 +49,23 @@ jobs:
           advanced-security: false
           min-severity: medium
           online-audits: false
+
+  # Claude review (shared reusable workflow). Runs only on pull requests from this
+  # repository. The review action skips PRs that change this file, so those need a
+  # human approval.
+  claude-review:
+    name: claude-review
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'review_requested' ||
+       github.event.requested_team.slug == 'claude-review')
+    uses: Continuous-Actions/shared/.github/workflows/claude-review.yml@180631d76d2aab123900a17e27f2212331266137
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
