@@ -1,6 +1,6 @@
 {
   "name": "go-tokenless",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Move npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC): an Agent Skill plus an MCP server that plans and applies the workflow changes.",
   "homepage": "https://github.com/Continuous-Actions/go-tokenless",
   "repository": "https://github.com/Continuous-Actions/go-tokenless",

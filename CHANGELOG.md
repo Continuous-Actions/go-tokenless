@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.2.0
+## 1.0.0
+
+First stable release. The CLI options, exit codes, `--json` plan shape and MCP tool inputs will not change incompatibly within 1.x.
+
+- Full GitHub `repository` URLs are left as they are; only shorthands and missing fields are rewritten.
+- Releases attach the npm tarball with a signed SLSA provenance attestation. CodeQL, Dependabot and fast-check fuzzing were added.
 
 ### Security (from three adversarial review rounds)
 
