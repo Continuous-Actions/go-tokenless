@@ -11,6 +11,8 @@ permissions:
 
 jobs:
   npm:
+    # Forks inherit this workflow; only the upstream repository publishes.
+    if: github.repository == 'Continuous-Actions/go-tokenless'
     runs-on: ubuntu-latest
     permissions:
       contents: read
