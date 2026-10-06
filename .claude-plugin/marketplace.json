@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "go-tokenless",
-      "source": "./",
+      "source": "./claude-plugin",
       "description": "Move npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC)."
     }
   ]
