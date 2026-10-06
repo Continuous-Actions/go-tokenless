@@ -1,0 +1,10 @@
+title: go-tokenless
+description: Move npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC), and fix ENEEDAUTH, E404 and E422 trusted publishing errors.
+url: https://continuous-actions.github.io
+baseurl: /go-tokenless
+theme: jekyll-theme-primer
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+exclude:
+  - assets/logo.svg

@@ -28,5 +28,6 @@ npm publish, pnpm publish, Yarn Berry `yarn npm publish` (4.10.3+), changesets/a
 ## Docs
 
 - README: https://github.com/Continuous-Actions/go-tokenless#readme
+- Error guides (ENEEDAUTH, E404 PUT, E422 repository.url, leftover tokens, 2FA-bypass notice): https://continuous-actions.github.io/go-tokenless/
 - Agent Skill: https://github.com/Continuous-Actions/go-tokenless/blob/main/skills/go-tokenless/SKILL.md
 - npm trusted publishing: https://docs.npmjs.com/trusted-publishers
