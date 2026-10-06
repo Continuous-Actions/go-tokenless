@@ -18,8 +18,8 @@
     "type": "git",
     "url": "git+https://github.com/Continuous-Actions/go-tokenless.git"
   },
-  "homepage": "https://github.com/Continuous-Actions/go-tokenless#readme",
-  "bugs": "https://github.com/Continuous-Actions/go-tokenless/issues",
+  "homepage": "https://github.com/continuous-actions/go-tokenless#readme",
+  "bugs": "https://github.com/continuous-actions/go-tokenless/issues",
   "mcpName": "io.github.Continuous-Actions/go-tokenless",
   "scripts": {
     "build": "node scripts/build.mjs",

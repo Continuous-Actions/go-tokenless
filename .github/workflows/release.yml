@@ -19,7 +19,7 @@ permissions:
 jobs:
   npm:
     # Forks inherit this workflow; only the upstream repository publishes.
-    if: github.repository == 'Continuous-Actions/go-tokenless' && github.event_name == 'push'
+    if: github.repository == 'continuous-actions/go-tokenless' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,7 +43,7 @@ jobs:
 
   github:
     needs: npm
-    if: github.repository == 'Continuous-Actions/go-tokenless' && github.event_name == 'push'
+    if: github.repository == 'continuous-actions/go-tokenless' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,7 +87,7 @@ jobs:
   mcp-registry:
     needs: npm
     if: >-
-      always() && github.repository == 'Continuous-Actions/go-tokenless' &&
+      always() && github.repository == 'continuous-actions/go-tokenless' &&
       (needs.npm.result == 'success' ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.npm.result == 'skipped'))
     runs-on: ubuntu-latest

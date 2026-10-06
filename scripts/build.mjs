@@ -18,6 +18,6 @@ await build({
   legalComments: 'eof',
   logLevel: 'warning',
   define: { 'process.env.GO_TOKENLESS_VERSION': JSON.stringify(version) },
-  banner: { js: `#!/usr/bin/env node\n// go-tokenless (MIT) https://github.com/Continuous-Actions/go-tokenless. Generated file, do not edit.\nimport { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);` },
+  banner: { js: `#!/usr/bin/env node\n// go-tokenless (MIT) https://github.com/continuous-actions/go-tokenless. Generated file, do not edit.\nimport { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);` },
 });
 console.log(`dist/cli.js: ${statSync('dist/cli.js').size} bytes`);

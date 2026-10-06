@@ -1,10 +1,10 @@
 {
   "name": "continuous-actions",
   "owner": {
-    "name": "Continuous-Actions"
+    "name": "continuous-actions"
   },
   "metadata": {
-    "description": "Developer tools from Continuous-Actions."
+    "description": "Developer tools from continuous-actions."
   },
   "plugins": [
     {

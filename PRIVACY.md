@@ -7,4 +7,4 @@ go-tokenless (the CLI, the MCP server, the Agent Skill and the Claude and Gemini
 - **Never accessed:** your secrets, tokens, npm account or GitHub account.
 - **Third parties:** npm's own privacy policy covers requests to the npm registry.
 
-Questions: open an issue at https://github.com/Continuous-Actions/go-tokenless/issues.
+Questions: open an issue at https://github.com/continuous-actions/go-tokenless/issues.
