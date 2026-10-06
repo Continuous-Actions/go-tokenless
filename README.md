@@ -179,6 +179,8 @@ go-tokenless never touches your npm account, secrets or git history. After `appl
 
 ## Troubleshooting
 
+Each error has its own page with causes and fixes: [ENEEDAUTH](https://continuous-actions.github.io/go-tokenless/errors/eneedauth.html), [404 on PUT](https://continuous-actions.github.io/go-tokenless/errors/e404-put.html), [E422 repository.url](https://continuous-actions.github.io/go-tokenless/errors/e422-repository-url.html), [still using the token](https://continuous-actions.github.io/go-tokenless/errors/still-uses-token.html), and [the 2FA-bypass notice](https://continuous-actions.github.io/go-tokenless/errors/bypass-2fa-notice.html).
+
 | Error | Usual cause |
 |---|---|
 | `npm error code ENEEDAUTH` | No `id-token: write`, npm older than 11.5.1, or the workflow file name doesn't match the trusted publisher exactly (case-sensitive, with `.yml`) |
