@@ -4,10 +4,10 @@
 
 # go-tokenless
 
+<!-- Scorecard URLs are case-sensitive: keep the org login "Continuous-Actions". -->
 [![CI](https://github.com/continuous-actions/go-tokenless/actions/workflows/ci.yml/badge.svg)](https://github.com/continuous-actions/go-tokenless/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/go-tokenless?logo=npm)](https://www.npmjs.com/package/go-tokenless)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-go--tokenless-blue)](https://registry.modelcontextprotocol.io/v0/servers?search=go-tokenless)
-<!-- Scorecard URLs are case-sensitive: keep the org login "Continuous-Actions". -->
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Continuous-Actions/go-tokenless/badge)](https://scorecard.dev/viewer/?uri=github.com/Continuous-Actions/go-tokenless)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
