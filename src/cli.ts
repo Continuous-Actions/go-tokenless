@@ -20,6 +20,9 @@ Options:
   --npm-version <range>
                   npm version for the inserted upgrade step (default ^12).
                   Other versions may break publishing; a warning is shown.
+  --read-token <SECRET>
+                  Give install steps (npm ci, pnpm install, ...) a read-only npm token
+                  from this secret, for private packages. Publish steps stay tokenless.
   --npm-args "<args>"
                   Extra arguments added to every npm command it generates
                   (the upgrade step and the npm trust commands), e.g. "--registry=https://registry.npmjs.org"
@@ -41,6 +44,7 @@ export async function main(argv: string[]): Promise<number> {
     const i = args.indexOf(name);
     if (i < 0) return undefined;
     const v = args[i + 1];
+    if (v === undefined || (v.startsWith('--') && name !== '--npm-args')) throw new UsageError(`${name} needs a value`);
     args.splice(i, 2);
     return v;
   };
@@ -52,13 +56,14 @@ export async function main(argv: string[]): Promise<number> {
   const repo = value('--repo');
   const npmVersion = value('--npm-version');
   const npmArgs = value('--npm-args');
+  const readToken = value('--read-token');
   const cwd = resolve(value('--cwd') ?? '.');
   const command = args.shift() ?? 'plan';
   if (args.length > 0) { console.error(`Unknown argument: ${args[0]}\n\n${HELP}`); return 2; }
   if (repo !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(repo)) { console.error('--repo must look like owner/repo'); return 2; }
 
   try {
-    checkNpmOptions({ npmVersion, npmArgs });
+    checkNpmOptions({ npmVersion, npmArgs, readToken });
   } catch (e) {
     console.error(String((e as Error).message));
     return 2;
@@ -69,8 +74,8 @@ export async function main(argv: string[]): Promise<number> {
     return -1; // keep running
   }
   let plan: Plan;
-  if (command === 'plan') plan = (await buildPlan(cwd, { repo, offline, npmVersion, npmArgs })).plan;
-  else if (command === 'apply') plan = await applyPlan(cwd, { repo, offline, npmVersion, npmArgs });
+  if (command === 'plan') plan = (await buildPlan(cwd, { repo, offline, npmVersion, npmArgs, readToken })).plan;
+  else if (command === 'apply') plan = await applyPlan(cwd, { repo, offline, npmVersion, npmArgs, readToken });
   else { console.error(`Unknown command: ${command}\n\n${HELP}`); return 2; }
 
   console.log(json ? JSON.stringify(plan, null, 2) : formatPlan(plan, { diff: diff || command === 'plan' }));

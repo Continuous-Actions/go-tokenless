@@ -41,7 +41,8 @@ jobs:
     needs: npm
     if: >-
       always() && github.repository == 'Continuous-Actions/go-tokenless' &&
-      (needs.npm.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.npm.result == 'skipped'))
+      (needs.npm.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.npm.result == 'skipped'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,9 +59,10 @@ jobs:
           curl -fsSL -o mcp-publisher.tar.gz "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
           echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
           tar xzf mcp-publisher.tar.gz mcp-publisher
-      - name: Set server.json version from package.json
+      - name: Set server.json version from package.json (must already be on npm)
         run: |
           VERSION="$(node -p 'require("./package.json").version')"
+          npm view "go-tokenless@$VERSION" version
           jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' server.json > server.tmp && mv server.tmp server.json
       - run: ./mcp-publisher login github-oidc
       - run: ./mcp-publisher publish

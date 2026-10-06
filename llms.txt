@@ -1,6 +1,6 @@
 # go-tokenless
 
-> CLI and MCP server (`npx go-tokenless`) that migrates npm publishing in GitHub Actions from stored tokens (NPM_TOKEN, NODE_AUTH_TOKEN) to npm trusted publishing (OIDC). It edits only the lines that need changing in `.github/workflows/*.yml` and `package.json`: removes token env vars and `.npmrc` token lines, adds `permissions: id-token: write`, makes sure npm is 11.5.1+ (Node 24, or an `npm install -g npm@^12` step pinned to one major), sets setup-node `registry-url`, updates changesets/action to v2 and JS-DevTools/npm-publish to v4, and fixes `repository.url`. It prints the `npm trust github` command for each package and the steps that need the user's npm 2FA. It never touches the npm account, git history or secrets.
+> CLI and MCP server (`npx go-tokenless`) that migrates npm publishing in GitHub Actions from stored tokens (NPM_TOKEN, NODE_AUTH_TOKEN) to npm trusted publishing (OIDC). It edits only the lines that need changing in `.github/workflows/*.yml` and `package.json`: removes token env vars and `.npmrc` token lines, adds `permissions: id-token: write`, makes sure npm is 11.5.1+ (Node 24, or an `npm install -g npm@^12` step pinned to one major), sets setup-node `registry-url`, updates JS-DevTools/npm-publish to v4, and fixes `repository.url`. It prints the `npm trust github` command for each package and the steps that need the user's npm 2FA. It never touches the npm account, git history or secrets.
 
 Use it when a user wants to remove an npm token from CI, set up trusted publishing / OIDC / provenance for npm, fix `npm publish` errors ENEEDAUTH, E404 or E422 (repository.url) in GitHub Actions, or prepare for npm removing direct token publishing in January 2027.
 
@@ -8,8 +8,8 @@ Use it when a user wants to remove an npm token from CI, set up trusted publishi
 
 - `npx -y go-tokenless` (plan, read-only; add `--json` for machine output with `status`, `changes`, `diff`, `findings`, `trust`, `nextSteps`)
 - `npx -y go-tokenless apply` (write the changes)
-- `npx -y go-tokenless mcp` (MCP server over stdio; tools `plan_trusted_publishing`, `apply_trusted_publishing`, input `{ path, repo?, offline?, npmVersion?, npmArgs? }`)
-- `--npm-version <range>` overrides the npm installed by the upgrade step (default `^12`; other versions trigger a warning, below 11.5.1 is refused). `--npm-args "<args>"` appends extra arguments to every generated npm command.
+- `npx -y go-tokenless mcp` (MCP server over stdio; tools `plan_trusted_publishing`, `apply_trusted_publishing`, input `{ path, repo?, offline?, npmVersion?, npmArgs?, readToken? }`)
+- `--npm-version <range>` overrides the npm installed by the upgrade step (default `^12`; other versions trigger a warning, below 11.5.1 is refused). `--npm-args "<args>"` appends extra arguments to every generated npm command. `--read-token <SECRET>` gives install steps (`npm ci`, `pnpm install`, ...) a read-only `NODE_AUTH_TOKEN` from that secret for private org packages, while publish steps stay tokenless.
 
 Exit codes: 0 ok, 1 blocked (errors need a human), 2 usage error, 3 unexpected error.
 
@@ -19,7 +19,7 @@ Exit codes: 0 ok, 1 blocked (errors need a human), 2 usage error, 3 unexpected e
 - `applied`: files written; `nextSteps` remain
 - `already-tokenless`: nothing to change
 - `no-publish-workflow`: nothing publishes to npm from GitHub Actions
-- `blocked`: e.g. self-hosted runner (trusted publishing needs GitHub-hosted runners) or repository.url pointing at another repo
+- `blocked`: a human must decide; nothing is written. Causes: a publish job reachable by untrusted triggers (pull_request_target, issue_comment, workflow_run), a self-hosted runner, repository.url pointing at another repo, YAML anchors, or a token passed to a job whose publish command can't be found (`publish-not-found`)
 
 ## Supported
 

@@ -68,13 +68,19 @@ export function str(node: unknown): string | undefined {
 }
 
 /** Text edit that deletes a block-map pair (all of its lines). */
-export function deletePair(src: Source, pair: Pair<any, any>): TextEdit {
+export function deletePair(src: Source, pair: Pair<any, any>, parent?: YAMLMap): TextEdit {
   const keyStart = (pair.key as Node).range![0];
   const value = pair.value as Node | null;
   const end = value?.range ? value.range[1] : (pair.key as Node).range![1];
   const first = src.lineOf(keyStart);
   const last = src.lineOf(Math.max(keyStart, end - 1));
-  // Keep a trailing comment that sits on its own line after the value.
+  // `- env: ...` as the first key of a list item: keep the dash and pull the next key up to it.
+  const before = src.text.slice(src.lineStart(first), keyStart);
+  if (/-\s*$/.test(before) && /\S/.test(before)) {
+    const idx = parent ? parent.items.indexOf(pair) : -1;
+    const next = idx >= 0 ? parent!.items[idx + 1] : undefined;
+    if (next) return { start: keyStart, end: (next.key as Node).range![0], text: '' };
+  }
   return { start: src.lineStart(first), end: src.lineEnd(last), text: '' };
 }
 
@@ -117,8 +123,14 @@ export function addPair(src: Source, map: YAMLMap, key: string, value: string | 
   let at = anchor ? src.lineStart(src.lineOf((anchor.key as Node).range![0])) : mapEnd(src, map);
   if (anchor) {
     // Insert above any comment lines that introduce the anchor key.
+    // Only comment lines at the key's own indent, and never inside the previous value
+    // (a `#` line in a multi-line string is not a comment).
+    const idx = map.items.indexOf(anchor);
+    const prev = idx > 0 ? map.items[idx - 1] : undefined;
+    const prevNode = (prev?.value ?? prev?.key) as Node | undefined;
+    const floor = prevNode?.range ? src.lineOf(Math.max(0, prevNode.range[1] - 1)) + 1 : 0;
     let line = src.lineOf(at);
-    while (line > 0 && /^\s*#/.test(src.lineText(line - 1))) line--;
+    while (line - 1 >= floor && /^\s*#/.test(src.lineText(line - 1)) && src.lineText(line - 1).search(/\S/) === indent) line--;
     at = src.lineStart(line);
   }
   let text = renderPair(key, value, indent, unit, nl);
@@ -131,10 +143,16 @@ export function addPair(src: Source, map: YAMLMap, key: string, value: string | 
 export function insertStepBefore(src: Source, step: Node, fields: Array<[string, string | Record<string, string>]>, unit = 2): TextEdit {
   const nl = NL(src.text);
   const start = step.range![0];
-  const line = src.lineOf(start);
-  const lineText = src.lineText(line);
-  const dash = lineText.indexOf('-');
-  const col = dash >= 0 && dash < src.column(start) ? dash : Math.max(0, src.column(start) - 2);
+  let line = src.lineOf(start);
+  let lineText = src.lineText(line);
+  let dash = lineText.indexOf('-');
+  // A list item written as a bare `-` line with its keys below it.
+  if (!(dash >= 0 && dash < src.column(start)) && line > 0 && src.lineText(line - 1).trim() === '-') {
+    line -= 1;
+    lineText = src.lineText(line);
+    dash = lineText.indexOf('-');
+  }
+  const col = dash >= 0 && (dash < src.column(start) || lineText.trim() === '-') ? dash : Math.max(0, src.column(start) - 2);
   const keyCol = col + 2;
   let text = '';
   fields.forEach(([k, v], i) => {

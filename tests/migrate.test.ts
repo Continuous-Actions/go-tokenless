@@ -127,7 +127,7 @@ jobs:
 });
 
 describe('release tools', () => {
-  it('changesets: bumps the action to v2 and keeps GITHUB_TOKEN', () => {
+  it('changesets: keeps the action version and GITHUB_TOKEN', () => {
     const root = makeRepo({
       '.github/workflows/release.yml': `name: Release
 on:
@@ -161,7 +161,7 @@ jobs:
     expect(p.packages.map((x: any) => x.name)).toEqual(['@acme/a']);
     run(root, 'apply');
     const wf = read(root, '.github/workflows/release.yml');
-    expect(wf).toContain('uses: changesets/action@v2');
+    expect(wf).toContain('uses: changesets/action@v1');
     expect(wf).toContain('      pull-requests: write\n      id-token: write\n');
     expect(wf).toContain('GITHUB_TOKEN');
     expect(wf).not.toContain('NPM_TOKEN');
@@ -333,10 +333,12 @@ jobs:
     expect(read(root, '.github/workflows/p.yml')).toContain('run: npm install -g npm@^11.6.0 --registry=https://registry.npmjs.org --loglevel=warn\n');
   });
 
-  it('quotes args that would break YAML', () => {
+  it('rejects shell syntax in --npm-args and --npm-version', () => {
     const root = makeRepo(files);
-    run(root, 'apply', '--npm-args', '--foo="a: b" # x');
-    expect(read(root, '.github/workflows/p.yml')).toContain(`run: 'npm install -g npm@^12 --foo="a: b" # x'\n`);
+    expect(run(root, '--npm-args', '--foo="a: b" # x').code).toBe(2);
+    expect(run(root, '--npm-args', '--foo; curl x | sh').code).toBe(2);
+    expect(run(root, '--npm-version', '>=11.5.1').code).toBe(2);
+    expect(run(root, '--npm-version', '12 || sh').code).toBe(2);
   });
 
   it('blocks npm versions without trusted publishing', () => {
@@ -356,5 +358,199 @@ jobs:
   it('warns when an exact Node 22 is too old for npm 12', () => {
     const root = makeRepo({ ...files, '.github/workflows/p.yml': NODE22.replace('node-version: 22', 'node-version: 22.14.0') });
     expect(plan(root).plan.findings.map((f: any) => f.code)).toContain('node-too-old-for-npm-12');
+  });
+});
+
+describe('read-only install token', () => {
+  const WF = `on: push
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Install docs deps
+        run: pnpm install --frozen-lockfile
+        env:
+          CI: true
+      - run: npm install -g npm@^12
+      - run: npm publish
+`;
+  const files = { '.github/workflows/release.yml': WF, 'package.json': pkg({ name: '@acme/app', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) };
+
+  it('without the flag, removes the token everywhere and says nothing extra', () => {
+    const root = makeRepo(files);
+    const p = plan(root).plan;
+    expect(p.findings.filter((f: any) => f.level === 'warning')).toEqual([]);
+    run(root, 'apply');
+    expect(read(root, '.github/workflows/release.yml')).not.toContain('NODE_AUTH_TOKEN');
+  });
+
+  it('gives install steps the read-only token, never the publish step', () => {
+    const root = makeRepo(files);
+    const p = plan(root, '--read-token', 'NPM_READ_TOKEN').plan;
+    expect(p.nextSteps.join('\n')).toContain('gh secret set NPM_READ_TOKEN');
+    expect(p.nextSteps.join('\n')).toContain('gh secret delete NPM_TOKEN');
+    run(root, 'apply', '--read-token', 'NPM_READ_TOKEN');
+    expect(read(root, '.github/workflows/release.yml')).toBe(`on: push
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_READ_TOKEN }}
+      - name: Install docs deps
+        run: pnpm install --frozen-lockfile
+        env:
+          CI: true
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_READ_TOKEN }}
+      - run: npm install -g npm@^12
+      - run: npm publish
+`);
+    expect(plan(root, '--read-token', 'NPM_READ_TOKEN').plan.status).toBe('already-tokenless');
+    expect(plan(root).plan.status).toBe('already-tokenless');
+  });
+
+  it('rejects a bad secret name', () => {
+    expect(run(makeRepo(files), '--read-token', 'secrets.X').code).toBe(2);
+  });
+});
+
+describe('install step detection', () => {
+  it('gives the read token only to real install commands', () => {
+    const steps = ['yarn', 'yarn install --immutable', 'yarn --frozen-lockfile', 'yarn build', 'yarn test --coverage', 'yarn npm publish', 'npm ci', 'npm run build', 'pnpm i', 'pnpm run lint', 'npm install -g npm@^12', 'bun install'];
+    const wf = `on: push
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+${steps.map((s) => `      - run: ${s}`).join('\n')}
+`;
+    const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) });
+    const changed = plan(root, '--read-token', 'NPM_READ_TOKEN').plan.changes.map((c: any) => c.description).filter((d: string) => d.includes('read-only token'));
+    expect(changed.map((d: string) => d.match(/step "([^"]+)"/)![1])).toEqual(['yarn', 'yarn install --immutable', 'yarn --frozen-lockfile', 'npm ci', 'pnpm i', 'bun install']);
+  });
+});
+
+describe('read token across jobs', () => {
+  it('also gives install steps in build/test jobs of the release workflow the read token', () => {
+    const wf = `on: push
+env:
+  NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm ci
+      - run: npm test
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm publish
+`;
+    const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) });
+    run(root, 'apply', '--read-token', 'NPM_READ_TOKEN');
+    const out = read(root, '.github/workflows/r.yml');
+    expect(out).not.toContain('secrets.NPM_TOKEN');
+    expect(out.match(/NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_READ_TOKEN \}\}/g)).toHaveLength(2);
+    expect(out).toContain('      - run: npm test\n');
+    expect(plan(root, '--read-token', 'NPM_READ_TOKEN').plan.status).toBe('already-tokenless');
+  });
+});
+
+describe('read token and triggers', () => {
+  const wf = (on: string) => `on: ${on}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm ci
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+`;
+  const PKGJ = pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } });
+
+  it('reports which build jobs got the token, and mentions pull_request exposure', () => {
+    const p = plan(makeRepo({ '.github/workflows/r.yml': wf('[push, pull_request]'), 'package.json': PKGJ }), '--read-token', 'NPM_READ_TOKEN').plan;
+    const f = p.findings.find((x: any) => x.code === 'read-token-jobs');
+    expect(f.message).toContain('`build`');
+    expect(f.message).toContain('pull_request');
+  });
+
+  it('gives no job the token in a workflow outsiders can start', () => {
+    const root = makeRepo({ '.github/workflows/r.yml': wf('[push, pull_request_target]'), 'package.json': PKGJ });
+    run(root, 'apply', '--read-token', 'NPM_READ_TOKEN');
+    expect(read(root, '.github/workflows/r.yml')).not.toContain('NPM_READ_TOKEN');
+  });
+});
+
+describe('read token and other registries', () => {
+  it('leaves a GitHub Packages job untouched', () => {
+    const wf = `on: push
+jobs:
+  gpr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          registry-url: https://npm.pkg.github.com
+      - run: npm ci
+      - run: npm publish
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+`;
+    const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) });
+    run(root, 'apply', '--read-token', 'NPM_READ_TOKEN');
+    const out = read(root, '.github/workflows/r.yml');
+    expect(out.slice(0, out.indexOf('  npm:'))).toBe(wf.slice(0, wf.indexOf('  npm:')));
+    expect(out.match(/NPM_READ_TOKEN/g)).toHaveLength(1);
   });
 });
