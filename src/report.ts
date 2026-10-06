@@ -35,5 +35,5 @@ export function formatPlan(plan: Plan, opts: { diff?: boolean } = {}): string {
     plan.nextSteps.forEach((s, i) => out.push(`  ${i + 1}. ${s}`));
   }
   // Repo content (package names, file names) must not move the cursor or recolour the terminal.
-  return out.join('\n').replace(/[\x00-\x08\x0b-\x1f\x7f\x9b]/g, '?');
+  return out.join('\n').replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f\x9b]/g, '?');
 }

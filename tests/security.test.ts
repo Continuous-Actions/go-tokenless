@@ -127,3 +127,12 @@ describe('injection and lookalikes', () => {
     expect(read(root, 'package.json')).toBe(PKG);
   });
 });
+
+describe('output', () => {
+  it('shows CRLF diffs without replacement characters', () => {
+    const wf = 'on: push\r\njobs:\r\n  rel:\r\n    runs-on: ubuntu-latest\r\n    steps:\r\n      - run: npm publish\r\n        env:\r\n          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}\r\n';
+    const out = run(makeRepo({ '.github/workflows/r.yml': wf, 'package.json': PKG })).stdout;
+    expect(out).toContain('-          NODE_AUTH_TOKEN');
+    expect(out).not.toContain('?\n');
+  });
+});
