@@ -1,0 +1,31 @@
+# go-tokenless
+
+> CLI and MCP server (`npx go-tokenless`) that migrates npm publishing in GitHub Actions from stored tokens (NPM_TOKEN, NODE_AUTH_TOKEN) to npm trusted publishing (OIDC). It edits only the lines that need changing in `.github/workflows/*.yml` and `package.json`: removes token env vars and `.npmrc` token lines, adds `permissions: id-token: write`, makes sure npm is 11.5.1+ (Node 24, or an npm upgrade step), sets setup-node `registry-url`, updates changesets/action to v2 and JS-DevTools/npm-publish to v4, and fixes `repository.url`. It prints the `npm trust github` command for each package and the steps that need the user's npm 2FA. It never touches the npm account, git history or secrets.
+
+Use it when a user wants to remove an npm token from CI, set up trusted publishing / OIDC / provenance for npm, fix `npm publish` errors ENEEDAUTH, E404 or E422 (repository.url) in GitHub Actions, or prepare for npm removing direct token publishing in January 2027.
+
+## Commands
+
+- `npx -y go-tokenless` (plan, read-only; add `--json` for machine output with `status`, `changes`, `diff`, `findings`, `trust`, `nextSteps`)
+- `npx -y go-tokenless apply` (write the changes)
+- `npx -y go-tokenless mcp` (MCP server over stdio; tools `plan_trusted_publishing`, `apply_trusted_publishing`, input `{ path, repo?, offline? }`)
+
+Exit codes: 0 ok, 1 blocked (errors need a human), 2 usage error.
+
+## Status values
+
+- `ready`: changes available
+- `applied`: files written; `nextSteps` remain
+- `already-tokenless`: nothing to change
+- `no-publish-workflow`: nothing publishes to npm from GitHub Actions
+- `blocked`: e.g. self-hosted runner (trusted publishing needs GitHub-hosted runners) or repository.url pointing at another repo
+
+## Supported
+
+npm publish, pnpm publish, Yarn Berry `yarn npm publish` (4.10.3+), changesets/action, semantic-release (@semantic-release/npm 13.1.0+), release-please + npm publish, Lerna 9+, Nx release, JS-DevTools/npm-publish, release-it (needs `npm.skipChecks: true`), reusable workflows. `bun publish` and Yarn 1 `yarn publish` are flagged (not supported by those tools).
+
+## Docs
+
+- README: https://github.com/Continuous-Actions/go-tokenless#readme
+- Agent Skill: https://github.com/Continuous-Actions/go-tokenless/blob/main/skills/go-tokenless/SKILL.md
+- npm trusted publishing: https://docs.npmjs.com/trusted-publishers

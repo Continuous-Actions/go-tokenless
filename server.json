@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Continuous-Actions/go-tokenless",
+  "title": "go-tokenless",
+  "description": "Move npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC).",
+  "repository": {
+    "url": "https://github.com/Continuous-Actions/go-tokenless",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "go-tokenless",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "packageArguments": [{ "type": "positional", "value": "mcp" }]
+    }
+  ]
+}

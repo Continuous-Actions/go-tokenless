@@ -1,0 +1,10 @@
+node_modules/
+coverage/
+*.log
+.tmp/
+.claude/
+.yarn/
+.pnp.*
+package-lock.json
+CLAUDE.md
+dist/

@@ -1,0 +1,55 @@
+{
+  "name": "go-tokenless",
+  "version": "0.1.0",
+  "description": "Switch npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC) with one command. CLI, MCP server and Agent Skill.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14"
+  },
+  "bin": "dist/cli.js",
+  "files": [
+    "server.json",
+    "dist",
+    "skills",
+    "llms.txt"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Continuous-Actions/go-tokenless.git"
+  },
+  "homepage": "https://github.com/Continuous-Actions/go-tokenless#readme",
+  "bugs": "https://github.com/Continuous-Actions/go-tokenless/issues",
+  "mcpName": "io.github.Continuous-Actions/go-tokenless",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "check": "tsc -p tsconfig.json && node scripts/build.mjs && vitest run"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.1.0",
+    "@types/node": "24.19.1",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.2",
+    "vitest": "5.0.3",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  },
+  "packageManager": "yarn@4.18.1",
+  "keywords": [
+    "npm",
+    "trusted-publishing",
+    "oidc",
+    "npm-token",
+    "provenance",
+    "github-actions",
+    "publish",
+    "release",
+    "changesets",
+    "semantic-release",
+    "mcp",
+    "agent-skill"
+  ]
+}
