@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- GitHub Action (`uses: continuous-actions/go-tokenless@v1`): check mode fails CI when npm publishing still relies on a stored token, with annotations and a job summary listing the fixes; `mode: report` only annotates.
+
 ## 1.0.0
 
 First stable release. The CLI options, exit codes, `--json` plan shape and MCP tool inputs will not change incompatibly within 1.x.

@@ -69,6 +69,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          AS_DRAFT: ${{ vars.RELEASE_AS_DRAFT }}
         run: |
           TGZ=$(ls go-tokenless-*.tgz)
           cp "$BUNDLE" "$TGZ.intoto.jsonl"
@@ -82,7 +83,11 @@ jobs:
           ' > notes.md
           gh release create "$TAG" "$TGZ" "$TGZ.intoto.jsonl" --repo "$GITHUB_REPOSITORY" \
             --draft --verify-tag --title "go-tokenless $TAG" --notes-file notes.md
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          # Set the repository variable RELEASE_AS_DRAFT=true to leave the release as a draft,
+          # e.g. to publish it by hand with "Publish this Action to the GitHub Marketplace" ticked.
+          if [ "$AS_DRAFT" != "true" ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
 
   mcp-registry:
     needs: npm
