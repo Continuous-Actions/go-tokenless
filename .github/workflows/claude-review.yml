@@ -4,9 +4,6 @@ on:
   pull_request:
     types: [opened, ready_for_review, synchronize, review_requested]
 
-# Jobs declare the permissions they need; nothing is granted by default.
-permissions: {}
-
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
