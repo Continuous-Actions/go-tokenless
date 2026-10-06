@@ -2,7 +2,7 @@
   "name": "go-tokenless",
   "displayName": "go-tokenless",
   "icon": "./.claude-plugin/icon.png",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Move npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC): an Agent Skill plus an MCP server that plans and applies the workflow changes.",
   "author": {
     "name": "Continuous-Actions",
@@ -26,7 +26,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "go-tokenless@1.0.0",
+        "go-tokenless@1.1.0",
         "mcp"
       ]
     }

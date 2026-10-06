@@ -38,7 +38,7 @@ runs:
         if [ -n "$READ_TOKEN" ]; then args+=(--read-token "$READ_TOKEN"); fi
         # Run from outside the repository so npx always uses the published package.
         cd "$RUNNER_TEMP"
-        npx --yes go-tokenless@1.0.0 "${args[@]}" > "$RUNNER_TEMP/go-tokenless-plan.json" || [ $? -eq 1 ]
+        npx --yes go-tokenless@1.1.0 "${args[@]}" > "$RUNNER_TEMP/go-tokenless-plan.json" || [ $? -eq 1 ]
     - name: Report
       id: check
       shell: bash
