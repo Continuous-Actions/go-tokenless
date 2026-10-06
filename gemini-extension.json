@@ -1,0 +1,12 @@
+{
+  "name": "go-tokenless",
+  "version": "0.1.0",
+  "description": "Move npm publishing in GitHub Actions from NPM_TOKEN to trusted publishing (OIDC).",
+  "contextFileName": "skills/go-tokenless/SKILL.md",
+  "mcpServers": {
+    "go-tokenless": {
+      "command": "npx",
+      "args": ["-y", "go-tokenless", "mcp"]
+    }
+  }
+}
