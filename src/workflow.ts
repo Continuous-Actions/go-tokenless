@@ -1,11 +1,12 @@
 // Finds jobs that publish to npm in a GitHub Actions workflow and works out the
 // text edits that move them from a stored token to trusted publishing (OIDC).
 
-import { parseDocument, isMap, isSeq, type Node, type Pair, type YAMLMap, type YAMLSeq } from 'yaml';
+import { parse as parseYaml, parseDocument, isMap, isSeq, type Node, type Pair, type YAMLMap, type YAMLSeq } from 'yaml';
 import {
   Source, addPair, applyEdits, deletePair, get, getPair, indentUnit, insertStepBefore, str, type TextEdit,
 } from './edits.ts';
 import type { Finding } from './types.ts';
+import { hasAnchors, isAuthTokenWriter, isTokenKey, isTokenOnlyScript, sameApartFromMigration } from './verify.ts';
 
 export const NPM_REGISTRY = 'https://registry.npmjs.org';
 /** Env/input names that carry an npm publish token. */
@@ -34,11 +35,13 @@ export type WorkflowPlan = {
   changes: string[];
   /** Secret names the removed token references used (to delete afterwards). */
   secrets: string[];
+  /** working-directory values of publish steps (repo-relative), when set. */
+  publishDirs: string[];
   /** Patched file text; equal to the input when nothing changes. */
   after: string;
 };
 
-export type ScriptLookup = (name: string) => string | undefined;
+export type ScriptLookup = (name: string, dir?: string) => string | undefined;
 
 /** npm CLI used by the inserted upgrade step. Pinned to a major: a new npm major can change publishing behaviour. */
 export const DEFAULT_NPM_VERSION = '^12';
@@ -57,53 +60,128 @@ function yamlScalar(v: string): string {
   return /^[\w@^~./=<>*|-][\w@^~./=<>*|:,"+ -]*$/.test(v) && !/\s$/.test(v) && !/: |\s#/.test(v) ? v : `'${v.replace(/'/g, "''")}'`;
 }
 
-const RUN_PATTERNS: Array<[RegExp, PublishTool]> = [
-  [/\bnpm\s+(?:[\w-]+\s+)*?publish\b/, 'npm'],
-  [/\bpnpm\s+(?:-r\s+|--recursive\s+|--filter\s+\S+\s+)*publish\b/, 'pnpm'],
-  [/\byarn\s+(?:workspaces\s+foreach\s+[^\n]*?)?npm\s+publish\b|\byarn\s+publish\b/, 'yarn'],
-  [/\bbun\s+publish\b/, 'bun'],
-  [/\bchangeset\s+publish\b/, 'changesets'],
-  [/\bsemantic-release\b/, 'semantic-release'],
-  [/\blerna\s+publish\b/, 'lerna'],
-  [/\brelease-it\b/, 'release-it'],
-  [/\bnpx\s+np\b|(?:^|\s)np\s+(?:--yolo|--no-|patch|minor|major|\d)/, 'np'],
-  [/\bnx\s+release(?:\s+publish)?\b/, 'nx'],
-];
+/** Read access to the repository, used to follow scripts, Makefiles and composite actions. */
+export type Repo = {
+  /** A package.json script body, from the package in `dir` (repo-relative) or the root. */
+  script(name: string, dir?: string): string | undefined;
+  /** A repo-relative text file, or undefined (missing, outside the repo, or too large). */
+  read(rel: string): string | undefined;
+};
+const asRepo = (r: Repo | ScriptLookup): Repo => (typeof r === 'function' ? { script: (n) => r(n), read: () => undefined } : r);
 
-/** Publishing tools a shell snippet invokes, following `npm run x` / `yarn x` one level into package.json scripts. */
-export function toolsInRun(run: string, scripts: ScriptLookup, depth = 0): PublishTool[] {
+/** One shell command at a time: split on separators so patterns never scan a whole script. */
+function commands(run: string): string[] {
+  const out: string[] = [];
+  for (const raw of run.split('\n')) {
+    if (raw.length > 4000) continue; // generated blobs, not commands
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || /^(echo|printf)\b/.test(line)) continue;
+    out.push(...line.split(/&&|\|\||;|\|/).map((c) => c.trim()).filter(Boolean));
+  }
+  return out;
+}
+
+/** Package-manager subcommands (anything else after `pnpm`/`yarn`/`bun` is a script or binary). */
+const PM_COMMANDS = new Set(['install', 'i', 'add', 'remove', 'run', 'exec', 'dlx', 'publish', 'npm', 'test', 'build', 'pack', 'version', 'workspace', 'workspaces', 'why', 'up', 'upgrade', 'link', 'config', 'set', 'init', 'create', '-r', '--recursive', '--filter', '-F', '-w', '-C']);
+
+/** Which publishing tool a single command runs, if any. Dry runs never count. */
+function commandTool(cmd: string): PublishTool | undefined {
+  if (/(^|\s)(--dry-run|-n)(\s|=|$)/.test(cmd)) return undefined;
+  let w = cmd.replace(/^(\w+=\S*\s+)*/, '').replace(/^(npx|pnpx|pnpm\s+exec|pnpm\s+dlx|yarn\s+dlx|yarn\s+exec|bunx)\s+(-y\s+|--yes\s+)?/, '').split(/\s+/);
+  // `pnpm semantic-release` / `yarn lerna publish` run a package binary.
+  if (/^(pnpm|yarn|bun)$/.test(w[0] ?? '') && w[1] && !PM_COMMANDS.has(w[1])) w = w.slice(1);
+  // node_modules/.bin/semantic-release, semantic-release@19.0.5
+  w[0] = (w[0] ?? '').split('/').pop()!.replace(/@[\w.^~-]*$/, '');
+  const [a, b] = w;
+  const has = (x: string) => w.slice(1, 12).includes(x);
+  if (a === 'npm' && has('publish')) return 'npm';
+  if (a === 'pnpm' && has('publish')) return 'pnpm';
+  if (a === 'yarn' && (b === 'publish' || (has('npm') && has('publish')))) return 'yarn';
+  if (a === 'bun' && b === 'publish') return 'bun';
+  if (a === 'changeset' && b === 'publish') return 'changesets';
+  if (a === 'semantic-release' || (a === 'node' && /semantic-release/.test(b ?? ''))) return 'semantic-release';
+  if (a === 'lerna' && b === 'publish') return 'lerna';
+  if (a === 'release-it') return 'release-it';
+  if (a === 'np' && w.length > 1) return 'np';
+  if (a === 'nx' && b === 'release') return 'nx';
+  return undefined;
+}
+
+/**
+ * Publishing tools a shell snippet runs. Follows package.json scripts (`npm run x`, `yarn x`),
+ * local shell scripts (`./scripts/release.sh`, `bash scripts/x.sh`) and `make <target>`,
+ * a couple of levels deep.
+ */
+export function toolsInRun(run: string, repo: Repo | ScriptLookup, depth = 0, dir?: string): PublishTool[] {
+  const r = asRepo(repo);
   const out = new Set<PublishTool>();
-  // Dry runs and `npm pack` don't publish, so they never get id-token or a trusted publisher.
-  const real = run.split('\n').filter((l) => !/--dry-run\b|\s-n\s/.test(l)).join('\n');
-  for (const [re, tool] of RUN_PATTERNS) if (re.test(real)) out.add(tool);
-  run = real;
-  if (depth < 2) {
-    for (const m of run.matchAll(/\b(?:npm\s+run|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun\s+run)\s+([\w:.-]+)/g)) {
-      const body = scripts(m[1]!);
-      if (body) for (const t of toolsInRun(body, scripts, depth + 1)) out.add(t);
+  for (const cmd of commands(run)) {
+    const t = commandTool(cmd);
+    if (t) out.add(t);
+    if (depth >= 3) continue;
+    const follow = (body: string | undefined) => { if (body) for (const x of toolsInRun(body, r, depth + 1, dir)) out.add(x); };
+    let m = cmd.match(/^(?:npm\s+run(?:-script)?|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun\s+run)\s+([\w:.-]+)/);
+    if (m) {
+      const body = r.script(m[1]!, dir);
+      // Unknown script named after a tool (`npm run semantic-release`): it runs that tool.
+      if (body) follow(body);
+      else { const t2 = commandTool(m[1]!); if (t2 && t2 !== 'np') out.add(t2); }
     }
+    m = cmd.match(/^(?:(?:ba|z)?sh\s+|node\s+|\.\/)?((?:\.\/)?[\w./-]+\.(?:sh|bash|mjs|cjs|js))(\s|$)/);
+    if (m && !m[1]!.includes('..')) follow(r.read(join2(dir, m[1]!.replace(/^\.\//, ''))));
+    m = cmd.match(/^make\s+(?:-\S+\s+)*([\w.-]+)/);
+    if (m) follow(makeTarget(r.read(join2(dir, 'Makefile')), m[1]!));
   }
   return [...out];
 }
 
-function stepTools(step: YAMLMap, scripts: ScriptLookup): PublishTool[] {
+const join2 = (dir: string | undefined, rel: string) => (dir && dir !== '.' ? `${dir.replace(/^\.\//, '').replace(/\/+$/, '')}/${rel}` : rel);
+
+/** The recipe lines of one Makefile target. */
+function makeTarget(makefile: string | undefined, target: string): string | undefined {
+  if (!makefile) return undefined;
+  const lines = makefile.split('\n');
+  const i = lines.findIndex((l) => l.startsWith(`${target}:`));
+  if (i < 0) return undefined;
+  const body: string[] = [];
+  for (const l of lines.slice(i + 1)) {
+    if (!l.startsWith('\t')) break;
+    body.push(l.slice(1).replace(/^[@-]+/, ''));
+  }
+  return body.join('\n');
+}
+
+function stepTools(step: YAMLMap, repo: Repo, dir?: string): PublishTool[] {
   const uses = str(get(step, 'uses'))?.toLowerCase() ?? '';
   const out = new Set<PublishTool>();
-  if (uses.startsWith('changesets/action')) {
+  const add = (ts: PublishTool[]) => { for (const t of ts) out.add(t); };
+  if (/^changesets\/action\/publish@/.test(uses)) out.add('changesets');
+  else if (uses.startsWith('changesets/action@')) {
     const publish = str(get(get(step, 'with'), 'publish'));
-    if (publish) { out.add('changesets'); for (const t of toolsInRun(publish, scripts)) out.add(t); }
+    if (publish) { out.add('changesets'); add(toolsInRun(publish, repo, 0, dir)); }
   }
   if (uses.startsWith('js-devtools/npm-publish')) out.add('npm-publish-action');
   if (uses.startsWith('cycjimmy/semantic-release-action')) out.add('semantic-release');
+  if (/release-it/.test(uses)) out.add('release-it');
+  // Local composite action: look at the steps inside it.
+  const local = str(get(step, 'uses'))?.match(/^\.\/(.+?)\/?$/)?.[1];
+  if (local && !local.includes('..')) {
+    const text = repo.read(`${local}/action.yml`) ?? repo.read(`${local}/action.yaml`);
+    try {
+      const steps = text ? (parseYaml(text) as any)?.runs?.steps : undefined;
+      if (Array.isArray(steps)) for (const s of steps) if (typeof s?.run === 'string') add(toolsInRun(s.run, repo, 1, dir));
+    } catch { /* not YAML */ }
+  }
   const run = str(get(step, 'run'));
-  if (run) for (const t of toolsInRun(run, scripts)) out.add(t);
+  if (run) add(toolsInRun(run, repo, 0, dir));
   return [...out];
 }
 
 /** A token value: a secret reference, or a blank string (which also breaks OIDC). */
 const usesSecret = (v: unknown) => /\bsecrets\s*(\.|\[)/.test(str(v) ?? '') || (str(v) ?? 'x').trim() === '';
+/** GitHub's own token (GitHub Packages auth), never an npmjs.org token. */
+const isGithubToken = (v: unknown) => /secrets\s*(\.|\[\s*['"])GITHUB_TOKEN\b|\bgithub\.token\b/.test(str(v) ?? '');
 /** Env names that carry an npm auth token (beyond the common ones in TOKEN_KEYS). */
-const isTokenKey = (k: string) => TOKEN_KEYS.has(k) || /^(YARN_NPM_AUTH_TOKEN|NPM_CONFIG__AUTH(TOKEN)?)$/i.test(k) || /NPM\w*TOKEN|TOKEN\w*NPM/i.test(k);
 
 /** actions/setup-node used when a SHA-pinned job has none (kept current by Dependabot in this repo's tests). */
 const SETUP_NODE_SHA = '820762786026740c76f36085b0efc47a31fe5020';
@@ -122,7 +200,6 @@ export function isNpmRegistry(url: string): boolean {
     return false;
   }
 }
-const isAuthTokenWriter = (run: string) => /_authToken|npm\s+config\s+set\s+[^\n]*:_auth/.test(run);
 
 function majorOf(v: string | undefined): number | undefined {
   if (!v) return undefined;
@@ -132,12 +209,14 @@ function majorOf(v: string | undefined): number | undefined {
   return undefined;
 }
 
-function planOnce(file: string, text: string, scripts: ScriptLookup, callers: string[], npm: NpmOptions): WorkflowPlan {
+function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, callers: string[], npm: NpmOptions): WorkflowPlan {
+  const repo = asRepo(scripts);
   const findings: Finding[] = [];
   const changes: string[] = [];
   const name = file.split('/').pop()!;
   const secrets = new Set<string>();
-  const empty: WorkflowPlan = { file, trustFile: name, reusable: false, jobs: [], findings, changes, secrets: [], after: text };
+  const publishDirs = new Set<string>();
+  const empty: WorkflowPlan = { file, trustFile: name, reusable: false, jobs: [], findings, changes, secrets: [], publishDirs: [], after: text };
   let doc;
   try {
     doc = parseDocument(text);
@@ -187,7 +266,13 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     const steps = get(job, 'steps') as YAMLSeq | undefined;
     if (!isSeq(steps)) continue;
     const stepMaps = steps.items.filter(isMap) as YAMLMap[];
-    const publishSteps = stepMaps.map((s) => ({ s, tools: stepTools(s, scripts) })).filter((x) => x.tools.length > 0);
+    const jobDir = str(get(get(get(job, 'defaults'), 'run'), 'working-directory'));
+    const dirOf = (s: YAMLMap) => str(get(s, 'working-directory')) ?? jobDir;
+    const publishSteps = stepMaps.map((s) => ({ s, tools: stepTools(s, repo, dirOf(s)) })).filter((x) => x.tools.length > 0);
+    for (const { s } of publishSteps) {
+      const d = dirOf(s);
+      if (d && !d.includes('${{')) publishDirs.add(d.replace(/^\.\//, '').replace(/\/+$/, '') || '.');
+    }
     if (publishSteps.length === 0) continue;
     const tools = [...new Set(publishSteps.flatMap((x) => x.tools))];
     const jobLine = lineOf(jobPair.key);
@@ -233,7 +318,7 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     const tokenEdits: TextEdit[] = [];
     const removeTokens = (envMap: unknown, where: string, parent?: Pair<any, any>) => {
       if (!isMap(envMap)) return 0;
-      const hits = (envMap.items as Pair<any, any>[]).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value));
+      const hits = (envMap.items as Pair<any, any>[]).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value) && !isGithubToken(p.value));
       if (hits.length === 0) return 0;
       if (envMap.flow) {
         const keep = (envMap.items as Pair<any, any>[]).filter((p) => !hits.includes(p));
@@ -275,7 +360,7 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     // example a script that writes .npmrc) keeps token publishing alive: report it.
     for (const s of stepMaps) {
       if (publishSet.has(s) || installSteps.includes(s)) continue;
-      const left = ((get(s, 'env') as YAMLMap | undefined)?.items as Pair<any, any>[] | undefined ?? []).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value) && (str(p.value) ?? '').trim() !== '');
+      const left = ((get(s, 'env') as YAMLMap | undefined)?.items as Pair<any, any>[] | undefined ?? []).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value) && !isGithubToken(p.value) && (str(p.value) ?? '').trim() !== '');
       for (const p of left) {
         noteSecret(p.value);
         tokenRefs++;
@@ -286,8 +371,7 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     for (const s of stepMaps) {
       const run = str(get(s, 'run'));
       if (!run || !isAuthTokenWriter(run)) continue;
-      const lines = run.split('\n').map((l) => l.trim()).filter(Boolean);
-      if (lines.every((l) => isAuthTokenWriter(l) || /^(echo|cat|npm config|printf)\b.*registry/.test(l))) {
+      if (isTokenOnlyScript(run)) {
         tokenEdits.push(deleteSeqItem(src, steps, s));
         changes.push(`${jobId}: delete step "${str(get(s, 'name')) ?? 'write .npmrc'}" that writes an npm token to .npmrc`);
         tokenRefs++;
@@ -329,7 +413,7 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
         const base: Record<string, string> = {};
         if (isMap(rootPerms)) for (const p of rootPerms.items as Pair<any, any>[]) base[str(p.key)!] = str(p.value)!;
         else if (str(rootPerms) === 'read-all') for (const k of READ_ALL_SCOPES) base[k] = 'read';
-        else Object.assign(base, defaultPermissions(tools));
+        else Object.assign(base, defaultPermissions(tools, stepMaps));
         base['id-token'] = 'write';
         permEdits.push(addPair(src, job, 'permissions', base, { before: 'steps', unit }));
         if (rootPerms === undefined && Object.values(base).filter((v) => v === 'write').length > 1) {
@@ -343,6 +427,9 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     const setupEdits: TextEdit[] = [];
     const firstPublish = publishSteps[0]!.s;
     const npmBased = tools.some((t) => t !== 'yarn' && t !== 'bun');
+    // A job that already requests OIDC and passes no token is migrated: leave its setup alone.
+    const migrated = jobHasId && tokenRefs === 0;
+    if (!migrated) {
     if (!setupNode) {
       // Match the job's pinning style: SHA-pinned jobs get a SHA-pinned setup-node.
       const pinned = stepMaps.some((s) => /@[0-9a-f]{40}\b/i.test(str(get(s, 'uses')) ?? ''));
@@ -400,12 +487,13 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
         changes.push(`${jobId}: update ${floor.action} from ${ref} to v${floor.major} (older versions ${floor.why})`);
       }
     }
+    }
     for (const t of tools) {
       const note = TOOL_NOTES[t];
       if (note) add({ level: note.level, line: jobLine, code: `tool-${t}`, message: `Job \`${jobId}\`: ${note.message}` });
     }
 
-    plan.alreadyTokenless = jobHasId && tokenRefs === 0 && setupEdits.length === 0 && installEdits.length === 0;
+    plan.alreadyTokenless = migrated && installEdits.length === 0;
     if (plan.alreadyTokenless) {
       add({ level: 'ok', line: jobLine, code: 'already-tokenless', message: `Job \`${jobId}\` already publishes with trusted publishing.` });
     } else if (!plan.blocked) {
@@ -431,7 +519,7 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
 
   // Workflow-level env tokens.
   if (active && isMap(rootEnv)) {
-    const hits = (rootEnv.items as Pair<any, any>[]).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value));
+    const hits = (rootEnv.items as Pair<any, any>[]).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value) && !isGithubToken(p.value));
     for (const h of hits) {
       edits.push(rootEnv.items.length === hits.length ? deletePair(src, getPair(root, 'env')!) : deletePair(src, h));
       noteSecret(h.value);
@@ -454,14 +542,13 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     const check = parseDocument(after);
     if (check.errors.length > 0) {
       add({ level: 'error', line: 1, code: 'patch-failed', message: `Could not patch this file safely (${check.errors[0]!.message.split('\n')[0]}). Apply the listed changes by hand.` });
-      return { file, trustFile, reusable, jobs, findings, changes, secrets: [...secrets], after: text };
+      return { file, trustFile, reusable, jobs, findings, changes, secrets: [...secrets], publishDirs: [...publishDirs], after: text };
     }
   }
-  return { file, trustFile, reusable, jobs, findings, changes, secrets: [...secrets], after };
+  return { file, trustFile, reusable, jobs, findings, changes, secrets: [...secrets], publishDirs: [...publishDirs], after };
 }
 
 const ACTION_FLOORS = [
-  { action: 'changesets/action', major: 2, min: 'v2', why: 'write an .npmrc from NPM_TOKEN, which blocks OIDC' },
   { action: 'js-devtools/npm-publish', major: 4, min: 'v4.1.0', why: 'require the token input' },
 ];
 
@@ -470,6 +557,7 @@ const TOOL_NOTES: Partial<Record<PublishTool, { level: Finding['level']; message
   yarn: { level: 'info', message: 'Yarn Berry (`yarn npm publish`) supports trusted publishing from 4.10.3. Yarn 1 `yarn publish` does not; switch that command to `npm publish`.' },
   bun: { level: 'warning', message: '`bun publish` does not support trusted publishing yet. Switch the publish command to `npm publish`.' },
   'semantic-release': { level: 'info', message: 'semantic-release needs @semantic-release/npm 13.1.0 or later (semantic-release 25+) for trusted publishing.' },
+  changesets: { level: 'info', message: 'changesets/action publishes with trusted publishing once NPM_TOKEN is gone. If the first tokenless release fails to authenticate, update it to changesets/action@v2.' },
   lerna: { level: 'info', message: 'Lerna supports trusted publishing from v9; older versions fail with a 404.' },
   'release-it': { level: 'warning', message: 'release-it needs `npm.skipChecks: true` in its config, because its pre-publish auth check expects a token.' },
   np: { level: 'warning', message: '`np` is interactive and normally runs locally. Trusted publishing only applies to CI publishes.' },
@@ -515,10 +603,14 @@ function deleteSeqItem(src: Source, seq: YAMLSeq, item: Node): TextEdit {
 }
 
 /** Permissions a release job typically needs when the workflow declared none. */
-function defaultPermissions(tools: PublishTool[]): Record<string, string> {
+function defaultPermissions(tools: PublishTool[], steps: YAMLMap[]): Record<string, string> {
   if (tools.includes('semantic-release')) return { contents: 'write', issues: 'write', 'pull-requests': 'write' };
   if (tools.includes('changesets') || tools.includes('release-it') || tools.includes('lerna') || tools.includes('nx')) return { contents: 'write', 'pull-requests': 'write' };
-  return { contents: 'read' };
+  // Steps that create GitHub releases, tags or commits need to write contents.
+  const writes = steps.some((s) =>
+    /(softprops\/action-gh-release|actions\/create-release|ncipollo\/release-action|release-please-action|git-auto-commit-action|github-push-action|actions\/upload-release-asset)/i.test(str(get(s, 'uses')) ?? '') ||
+    /\bgit\s+(push|tag)\b|\bgh\s+release\b/.test(str(get(s, 'run')) ?? ''));
+  return { contents: writes ? 'write' : 'read' };
 }
 
 /**
@@ -526,13 +618,26 @@ function defaultPermissions(tools: PublishTool[]): Record<string, string> {
  * one-line `{ ... }` map) can't be applied together, so the file is re-planned
  * until it settles; the first pass's change list and findings describe it all.
  */
-export function planWorkflow(file: string, text: string, scripts: ScriptLookup, callers: string[] = [], npm: NpmOptions = DEFAULT_NPM): WorkflowPlan {
+export function planWorkflow(file: string, text: string, scripts: Repo | ScriptLookup, callers: string[] = [], npm: NpmOptions = DEFAULT_NPM): WorkflowPlan {
   const first = planOnce(file, text, scripts, callers, npm);
+  if (first.jobs.length > 0 && hasAnchors(text)) {
+    // Anchors and merge keys share nodes between jobs, so a line edit could change other
+    // jobs, and tokens can hide behind an alias. Report instead of editing.
+    const findings: Finding[] = [...first.findings.filter((f) => f.level !== 'ok'), { file, line: 1, level: 'error', code: 'yaml-anchors', message: 'This workflow uses YAML anchors or aliases, which go-tokenless does not edit automatically. Make the listed changes by hand, or expand the anchors and run it again.' }];
+    return { ...first, findings, jobs: first.jobs.map((j) => ({ ...j, alreadyTokenless: false, blocked: true })), after: text };
+  }
   let after = first.after;
   for (let i = 0; i < 3 && after !== text; i++) {
     const next = planOnce(file, after, scripts, callers, npm);
     if (next.after === after || next.findings.some((f) => f.code === 'patch-failed')) break;
     after = next.after;
+  }
+  if (process.env.GT_DEBUG && after !== text) process.stderr.write(`===AFTER ${file}
+${after}
+`);
+  if (after !== text && !sameApartFromMigration(text, after)) {
+    const findings: Finding[] = [...first.findings, { file, line: 1, level: 'error', code: 'patch-failed', message: 'The automatic edit would have changed more than the migration (for example merging two steps). Nothing was written; make the listed changes by hand.' }];
+    return { ...first, findings, after: text };
   }
   return { ...first, after };
 }

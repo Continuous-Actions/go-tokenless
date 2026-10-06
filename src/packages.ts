@@ -1,7 +1,7 @@
 // Publishable packages in the repo, and the `repository` field npm checks
 // against the workflow's repository when it accepts an OIDC publish.
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { Finding } from './types.ts';
@@ -26,7 +26,7 @@ const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.yar
 
 function readJson(path: string): any {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    return JSON.parse(readFileSync(path, 'utf8').replace(/^﻿/, ''));
   } catch {
     return undefined;
   }
@@ -34,7 +34,13 @@ function readJson(path: string): any {
 
 /** Expand simple workspace globs: `a/b`, `a/*`, `a/**`, `!a/x`. */
 function expand(root: string, patterns: string[]): string[] {
+  patterns = patterns.filter((p): p is string => typeof p === 'string');
   const out = new Set<string>();
+  // Only real (non-symlink) folders inside the repo: a pattern may not climb out with `..` or be absolute.
+  const inside = (p: string) => !p.startsWith('/') && !/^[a-z]:/i.test(p) && !p.split('/').includes('..');
+  const isDir = (rel: string) => { try { return lstatSync(join(root, rel)).isDirectory(); } catch { return false; } };
+  const hasPkg = (rel: string) => { try { return lstatSync(join(root, rel, 'package.json')).isFile(); } catch { return false; } };
+  patterns = patterns.map((p) => p.replace(/\\/g, '/')).filter((p) => inside(p.replace(/^!/, '').replace(/^\.\//, '')));
   const negated = patterns.filter((p) => p.startsWith('!')).map((p) => p.slice(1).replace(/^\.\//, '').replace(/\/+$/, ''));
   const walk = (rel: string, deep: boolean) => {
     let entries: string[] = [];
@@ -46,8 +52,8 @@ function expand(root: string, patterns: string[]): string[] {
     for (const e of entries) {
       if (SKIP.has(e) || e.startsWith('.')) continue;
       const child = rel ? `${rel}/${e}` : e;
-      if (!statSync(join(root, child)).isDirectory()) continue;
-      if (existsSync(join(root, child, 'package.json'))) out.add(child);
+      if (!isDir(child)) continue;
+      if (hasPkg(child)) out.add(child);
       if (deep) walk(child, true);
     }
   };
@@ -56,7 +62,7 @@ function expand(root: string, patterns: string[]): string[] {
     const p = raw.replace(/^\.\//, '').replace(/\/+$/, '');
     const star = p.indexOf('*');
     if (star < 0) {
-      if (existsSync(join(root, p, 'package.json'))) out.add(p);
+      if (isDir(p) && hasPkg(p)) out.add(p);
       continue;
     }
     const base = p.slice(0, star).replace(/\/+$/, '');
@@ -68,7 +74,10 @@ function expand(root: string, patterns: string[]): string[] {
       const dir = prefix.slice(0, prefix.lastIndexOf('/'));
       let entries: string[] = [];
       try { entries = readdirSync(join(root, dir)); } catch { /* none */ }
-      for (const e of entries) if (e.startsWith(namePrefix) && existsSync(join(root, dir, e, 'package.json'))) out.add(dir ? `${dir}/${e}` : e);
+      for (const e of entries) {
+        const rel = dir ? `${dir}/${e}` : e;
+        if (e.startsWith(namePrefix) && isDir(rel) && hasPkg(rel)) out.add(rel);
+      }
       continue;
     }
     walk(base, deep);
@@ -147,33 +156,81 @@ export function planPackages(root: string, packages: PackageInfo[], slug: string
   return plans;
 }
 
-/** Set `repository` in package.json text, keeping indentation and key order. */
+/**
+ * Set `repository` in package.json text by editing only that property's text, so
+ * everything else (key order, number formatting, escapes, duplicate keys) is untouched.
+ */
 export function setRepository(text: string, url: string, directory?: string): string | undefined {
+  const bom = text.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const body = text.slice(bom.length);
   let pkg: Record<string, unknown>;
   try {
-    pkg = JSON.parse(text);
+    pkg = JSON.parse(body);
   } catch {
     return undefined;
   }
-  const indent = text.match(/^[ \t]+(?=")/m)?.[0] ?? '  ';
+  if (!pkg || typeof pkg !== 'object' || Array.isArray(pkg)) return undefined;
+  const keys = topLevelKeys(body);
+  if (!keys) return undefined;
+  const nl = body.includes('\r\n') ? '\r\n' : '\n';
+  const indent = body.match(/^[ \t]+(?=")/m)?.[0] ?? '  ';
   const prev = pkg.repository;
-  const value: Record<string, string> = { type: 'git', url };
-  const dir = directory ?? (prev && typeof prev === 'object' ? (prev as any).directory : undefined);
-  if (dir) value.directory = dir;
-  let next: Record<string, unknown>;
-  if ('repository' in pkg) {
-    next = { ...pkg, repository: value };
-  } else {
-    next = {};
-    const after = ['description', 'version', 'name'].find((k) => k in pkg);
-    for (const [k, v] of Object.entries(pkg)) {
-      next[k] = v;
-      if (k === after) next.repository = value;
-    }
-    if (!('repository' in next)) next.repository = value;
+  const dir = directory ?? (prev && typeof prev === 'object' ? (prev as { directory?: string }).directory : undefined);
+  const fields: Array<[string, string]> = [['type', 'git'], ['url', url], ...(dir ? [['directory', dir] as [string, string]] : [])];
+  const render = (pad: string) => `{${nl}${fields.map(([k, v]) => `${pad}${indent}${JSON.stringify(k)}: ${JSON.stringify(v)}`).join(`,${nl}`)}${nl}${pad}}`;
+  const existing = keys.filter((k) => k.key === 'repository').pop();
+  if (existing) return bom + body.slice(0, existing.valueStart) + render(indent) + body.slice(existing.valueEnd);
+  const after = ['description', 'version', 'name'].map((k) => keys.filter((x) => x.key === k).pop()).find(Boolean) ?? keys[keys.length - 1];
+  const prop = `${JSON.stringify('repository')}: ${render(indent)}`;
+  if (!after) {
+    const open = body.indexOf('{');
+    return bom + body.slice(0, open + 1) + `${nl}${indent}${prop}${nl}` + body.slice(open + 1).replace(/^\s*/, '');
   }
-  const nl = text.includes('\r\n') ? '\r\n' : '\n';
-  let out = JSON.stringify(next, null, indent);
-  if (nl === '\r\n') out = out.replace(/\n/g, '\r\n');
-  return text.endsWith('\n') ? out + nl : out;
+  return bom + body.slice(0, after.valueEnd) + `,${nl}${indent}${prop}` + body.slice(after.valueEnd);
+}
+
+/** Offsets of each top-level key's value in a JSON object text (strings and nesting aware). */
+function topLevelKeys(text: string): Array<{ key: string; valueStart: number; valueEnd: number }> | undefined {
+  const out: Array<{ key: string; valueStart: number; valueEnd: number }> = [];
+  let depth = 0;
+  let i = 0;
+  const skipString = (from: number) => {
+    let k = from + 1;
+    while (k < text.length && text[k] !== '"') k += text[k] === '\\' ? 2 : 1;
+    return k + 1;
+  };
+  let pendingKey: string | undefined;
+  let valueStart = -1;
+  for (; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"') {
+      const end = skipString(i);
+      if (depth === 1 && pendingKey === undefined && valueStart < 0) {
+        // A key: look ahead for the colon.
+        const rest = text.slice(end).match(/^\s*:\s*/);
+        if (rest) {
+          pendingKey = JSON.parse(text.slice(i, end));
+          valueStart = end + rest[0].length;
+          i = valueStart - 1;
+          continue;
+        }
+      }
+      i = end - 1;
+      continue;
+    }
+    if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') {
+      depth--;
+      if (depth === 0 && pendingKey !== undefined) {
+        out.push({ key: pendingKey, valueStart, valueEnd: text.slice(valueStart, i).trimEnd().length + valueStart });
+        pendingKey = undefined;
+        valueStart = -1;
+      }
+    } else if (c === ',' && depth === 1 && pendingKey !== undefined) {
+      out.push({ key: pendingKey, valueStart, valueEnd: text.slice(valueStart, i).trimEnd().length + valueStart });
+      pendingKey = undefined;
+      valueStart = -1;
+    }
+  }
+  return depth === 0 ? out : undefined;
 }

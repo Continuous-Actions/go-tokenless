@@ -127,7 +127,7 @@ jobs:
 });
 
 describe('release tools', () => {
-  it('changesets: bumps the action to v2 and keeps GITHUB_TOKEN', () => {
+  it('changesets: keeps the action version and GITHUB_TOKEN', () => {
     const root = makeRepo({
       '.github/workflows/release.yml': `name: Release
 on:
@@ -161,7 +161,7 @@ jobs:
     expect(p.packages.map((x: any) => x.name)).toEqual(['@acme/a']);
     run(root, 'apply');
     const wf = read(root, '.github/workflows/release.yml');
-    expect(wf).toContain('uses: changesets/action@v2');
+    expect(wf).toContain('uses: changesets/action@v1');
     expect(wf).toContain('      pull-requests: write\n      id-token: write\n');
     expect(wf).toContain('GITHUB_TOKEN');
     expect(wf).not.toContain('NPM_TOKEN');

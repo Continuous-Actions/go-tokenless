@@ -1,10 +1,10 @@
 // Builds the whole migration plan for a repository and applies it.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { join, relative, isAbsolute } from 'node:path';
 import { findPackages, githubSlug, planPackages, type PackagePlan } from './packages.ts';
-import { DEFAULT_NPM_VERSION, planWorkflow, type NpmOptions, type WorkflowPlan } from './workflow.ts';
+import { DEFAULT_NPM_VERSION, planWorkflow, type NpmOptions, type Repo, type WorkflowPlan } from './workflow.ts';
 import type { Finding } from './types.ts';
 
 export type Status =
@@ -82,30 +82,47 @@ type Internal = { plan: Plan; files: Map<string, string> };
 
 export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<Internal> {
   checkNpmOptions(opts);
+  if (!isDirectory(root)) throw new UsageError(`Not a directory: ${root}`);
   const findings: Finding[] = [];
   const files = new Map<string, string>();
   const slug = opts.repo ?? remoteSlug(root);
+  if (!slug) findings.push({ level: 'warning', file: '.', code: 'repo-unknown', message: 'Could not tell which GitHub repository this is (no GitHub `origin` remote). Pass `--repo owner/repo` so the trust commands and `repository` fields can be filled in.' });
   const npm: NpmOptions = { npmVersion: opts.npmVersion?.trim() || DEFAULT_NPM_VERSION, npmArgs: opts.npmArgs?.trim() || undefined, readTokenSecret: opts.readToken };
   const extraArgs = npm.npmArgs ? ` ${npm.npmArgs}` : '';
   const packages = findPackages(root);
-  const rootScripts = packages.find((p) => p.dir === '.')?.scripts ?? {};
-  const scripts = (name: string) => rootScripts[name];
+  const byDir = new Map(packages.map((p) => [p.dir, p.scripts]));
+  const own = (o: Record<string, string> | undefined, k: string) => (o && Object.hasOwn(o, k) && typeof o[k] === 'string' ? o[k] : undefined);
+  const repo: Repo = {
+    script: (name, dir) => own(byDir.get(normDir(dir)), name) ?? own(byDir.get('.'), name) ?? own(readJsonSafe(root, `${normDir(dir)}/package.json`)?.scripts, name),
+    read: (rel) => readInside(root, rel),
+  };
 
   const wfDir = join(root, '.github', 'workflows');
-  const wfFiles = existsSync(wfDir) ? readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f)).sort() : [];
-  const texts = new Map(wfFiles.map((f) => [`.github/workflows/${f}`, readFileSync(join(wfDir, f), 'utf8')]));
+  const wfFiles = isDirectory(wfDir) ? readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f) && readInside(root, `.github/workflows/${f}`) !== undefined).sort() : [];
+  const texts = new Map(wfFiles.map((f) => [`.github/workflows/${f}`, readInside(root, `.github/workflows/${f}`)!]));
+  // Callers of a reusable workflow: any `uses: ./.github/workflows/<file>` (plain string match, no regex from file names).
   const callersOf = (file: string) =>
-    [...texts].filter(([f, t]) => f !== file && new RegExp(`uses:\\s*['"]?\\./${file.replace(/[.]/g, '\\.')}['"]?\\s*(#.*)?$`, 'm').test(t)).map(([f]) => f);
+    [...texts].filter(([f, t]) => f !== file && t.split('\n').some((l) => l.replace(/['"]/g, '').replace(/\s+#.*$/, '').trim().replace(/^-\s*/, '') === `uses: ./${file}`)).map(([f]) => f);
 
   const workflows: WorkflowPlan[] = [];
   for (const [file, text] of texts) {
-    const wp = planWorkflow(file, text, scripts, callersOf(file), npm);
+    const wp = planWorkflow(file, text, repo, callersOf(file), npm);
     if (wp.jobs.length === 0 && wp.findings.length === 0) continue;
     workflows.push(wp);
     findings.push(...wp.findings);
     if (wp.after !== text) files.set(file, wp.after);
   }
   const publishing = workflows.filter((w) => w.jobs.length > 0);
+
+  // A workflow that hands an npm token to a job but whose publish command we can't see
+  // (a script outside the repo, a third-party action): say so instead of "nothing to do".
+  for (const [file, text] of texts) {
+    if (publishing.some((w) => w.file === file)) continue;
+    const m = text.match(/^\s*([A-Z_]*NPM[A-Z_]*TOKEN|NODE_AUTH_TOKEN|YARN_NPM_AUTH_TOKEN)\s*:\s*['"]?\$\{\{[^}]*\bsecrets\b/m);
+    if (m && !/secrets\.GITHUB_TOKEN/.test(m[0])) {
+      findings.push({ level: 'error', file, code: 'publish-not-found', message: `Passes \`${m[1]}\` from a secret, but go-tokenless could not find the command that publishes (it may be inside an action or a script it can't read). Migrate this workflow by hand: grant \`id-token: write\` to the publishing job and remove the token.` });
+    }
+  }
 
   // Reusable publish workflows: the caller needs id-token too.
   for (const w of publishing.filter((x) => x.reusable)) {
@@ -137,22 +154,27 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
   const pubs = pkgPlans.filter((p) => p.name);
   for (const w of publishing) {
     const text = texts.get(w.file)!;
+    const inDirs = pubs.filter((p) => w.publishDirs.includes(p.dir));
     const mentioned = pubs.filter((p) => p.dir !== '.' && (text.includes(p.dir) || text.includes(p.name)));
-    const covered = publishing.length === 1 || mentioned.length === 0 ? pubs : mentioned;
+    const covered = inDirs.length > 0 ? inDirs : publishing.length === 1 || mentioned.length === 0 ? pubs : mentioned;
     const okJobs = w.jobs.filter((j) => !j.blocked);
     if (okJobs.length === 0) continue; // never name a blocked workflow as a trusted publisher
     const envs = [...new Set(okJobs.map((j) => j.environment))];
+    // npm checks the workflow that started the run: every caller of a reusable workflow.
+    const trustFiles = w.reusable ? callersOf(w.file).map((c) => c.split('/').pop()!) : [w.trustFile];
     for (const p of covered) {
-      for (const env of envs) {
-        if (!isValidNpmName(p.name)) {
-          findings.push({ level: 'error', file: p.file, code: 'invalid-package-name', message: `"${p.name}" is not a valid npm package name, so no trust command was generated for it.` });
-          continue;
+      if (!isValidNpmName(p.name)) {
+        findings.push({ level: 'error', file: p.file, code: 'invalid-package-name', message: `"${p.name}" is not a valid npm package name, so no trust command was generated for it.` });
+        continue;
+      }
+      for (const trustFile of trustFiles.length > 0 ? trustFiles : [w.trustFile]) {
+        for (const env of envs) {
+          const parts = ['npm', 'trust', 'github', p.name, '--repo', slug ?? '<owner>/<repo>', '--file', trustFile];
+          if (env) parts.push('--env', env);
+          parts.push('--allow-publish', '--yes');
+          const command = parts.map((x) => (x === '<owner>/<repo>' ? x : shellQuote(x))).join(' ') + extraArgs;
+          trust.push({ package: p.name, workflow: trustFile, environment: env, command });
         }
-        const parts = ['npm', 'trust', 'github', p.name, '--repo', slug ?? '<owner>/<repo>', '--file', w.trustFile];
-        if (env) parts.push('--env', env);
-        parts.push('--allow-publish', '--yes');
-        const command = parts.map((x) => (x === '<owner>/<repo>' ? x : shellQuote(x))).join(' ') + extraArgs;
-        trust.push({ package: p.name, workflow: w.trustFile, environment: env, command });
       }
     }
   }
@@ -208,9 +230,11 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
 /** Write the planned file changes. Returns the plan with status `applied`. */
 export async function applyPlan(root: string, opts: PlanOptions = {}): Promise<Plan> {
   const { plan, files } = await buildPlan(root, opts);
-  if (plan.status !== 'ready' && !(plan.status === 'blocked' && files.size > 0)) return plan;
+  // Blocked means a human has to decide something first: write nothing.
+  if (plan.status !== 'ready') return plan;
+  for (const f of files.keys()) if (readInside(root, f) === undefined) throw new Error(`Refusing to write outside the repository or through a link: ${f}`);
   for (const [f, text] of files) writeFileSync(join(root, f), text);
-  const status: Status = plan.status === 'blocked' ? 'blocked' : 'applied';
+  const status: Status = 'applied';
   return { ...plan, status, nextSteps: nextSteps(status, plan.trust, [...new Set(plan.workflows.flatMap((w) => w.secrets))], plan.repository, opts.readToken) };
 }
 
@@ -323,4 +347,43 @@ export function isValidNpmName(name: string): boolean {
 /** Single-quote a word for the shell unless it only has safe characters. */
 export function shellQuote(word: string): string {
   return /^[\w@%+=:,./~-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\''`)}'`;
+}
+
+const MAX_FILE = 1024 * 1024;
+
+function isDirectory(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+const normDir = (dir: string | undefined) => (dir ? dir.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '') || '.' : '.');
+
+/**
+ * Read a repo-relative file only if it is a regular file (not a link) that really lives
+ * inside the repository and is a sensible size. Everything go-tokenless reads or writes goes through here.
+ */
+export function readInside(root: string, rel: string): string | undefined {
+  if (!rel || isAbsolute(rel) || rel.replace(/\\/g, '/').split('/').includes('..')) return undefined;
+  const full = join(root, rel);
+  try {
+    const st = lstatSync(full);
+    if (!st.isFile() || st.size > MAX_FILE) return undefined;
+    const r = relative(realpathSync(root), realpathSync(full));
+    if (r.startsWith('..') || isAbsolute(r)) return undefined;
+    return readFileSync(full, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+function readJsonSafe(root: string, rel: string): any {
+  const t = readInside(root, rel);
+  try {
+    return t ? JSON.parse(t.replace(/^﻿/, '')) : undefined;
+  } catch {
+    return undefined;
+  }
 }
