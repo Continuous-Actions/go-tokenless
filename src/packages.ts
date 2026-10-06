@@ -145,7 +145,9 @@ export function planPackages(root: string, packages: PackageInfo[], slug: string
       findings.push({ level: 'error', file: p.file, code: 'repository-mismatch', message: `\`${p.name}\` declares repository ${p.repositoryUrl}, but this repo is ${slug}. npm rejects the publish (E422) unless they match. Fix it if the package moved; leave it if this is a fork that doesn't publish.` });
       continue;
     }
-    if (have === slug && p.repositoryUrl && /^git\+https:\/\/github\.com\//.test(p.repositoryUrl)) continue;
+    // Full GitHub URLs (https://, git+https://, git@) that already name this repo are fine as they are;
+    // only shorthands (`owner/repo`, `github:owner/repo`) and missing fields are rewritten.
+    if (have === slug && p.repositoryUrl && /github\.com/i.test(p.repositoryUrl)) continue;
     const text = readFileSync(join(root, p.file), 'utf8');
     const after = setRepository(text, canonical, p.dir === '.' ? undefined : p.dir);
     if (after && after !== text) {
