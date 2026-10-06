@@ -40,6 +40,21 @@ export type WorkflowPlan = {
 
 export type ScriptLookup = (name: string) => string | undefined;
 
+/** npm CLI used by the inserted upgrade step. Pinned to a major: a new npm major can change publishing behaviour. */
+export const DEFAULT_NPM_VERSION = '^12';
+export type NpmOptions = {
+  /** Version range for `npm install -g npm@<range>`. */
+  npmVersion: string;
+  /** Extra arguments appended to the npm commands go-tokenless generates. */
+  npmArgs?: string;
+};
+const DEFAULT_NPM: NpmOptions = { npmVersion: DEFAULT_NPM_VERSION };
+
+/** YAML plain scalar when safe, otherwise single-quoted. */
+function yamlScalar(v: string): string {
+  return /^[\w@^~./=<>*|-][\w@^~./=<>*|:,"+ -]*$/.test(v) && !/\s$/.test(v) && !/: |\s#/.test(v) ? v : `'${v.replace(/'/g, "''")}'`;
+}
+
 const RUN_PATTERNS: Array<[RegExp, PublishTool]> = [
   [/\bnpm\s+(?:[\w-]+\s+)*?publish\b/, 'npm'],
   [/\bpnpm\s+(?:-r\s+|--recursive\s+|--filter\s+\S+\s+)*publish\b/, 'pnpm'],
@@ -92,7 +107,7 @@ function majorOf(v: string | undefined): number | undefined {
   return undefined;
 }
 
-function planOnce(file: string, text: string, scripts: ScriptLookup, callers: string[]): WorkflowPlan {
+function planOnce(file: string, text: string, scripts: ScriptLookup, callers: string[], npm: NpmOptions): WorkflowPlan {
   const findings: Finding[] = [];
   const changes: string[] = [];
   const name = file.split('/').pop()!;
@@ -280,8 +295,12 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
       }
       const hasNpmUpgrade = stepMaps.some((s) => /npm\s+(i|install)\s+(-g|--global)\s+npm/.test(str(get(s, 'run')) ?? ''));
       if (npmBased && (major === undefined || major < 24) && !hasNpmUpgrade) {
-        setupEdits.push(insertStepBefore(src, firstPublish, [['name', 'Use an npm version that supports trusted publishing'], ['run', 'npm install -g npm@^11.5.1']], unit));
-        changes.push(`${jobId}: upgrade npm to 11.5.1+ before publishing (${nodeVersion && !nodeVersion.includes('${{') ? `Node ${nodeVersion} ships` : 'this Node version may ship'} an older npm)`);
+        setupEdits.push(insertStepBefore(src, firstPublish, [['name', 'Use an npm version that supports trusted publishing'], ['run', yamlScalar(`npm install -g npm@${npm.npmVersion}${npm.npmArgs ? ` ${npm.npmArgs}` : ''}`)]], unit));
+        changes.push(`${jobId}: install npm@${npm.npmVersion} before publishing (trusted publishing needs npm 11.5.1+; ${nodeVersion && !nodeVersion.includes('${{') ? `Node ${nodeVersion} ships` : 'this Node version may ship'} an older npm)`);
+        const exact = nodeVersion?.match(/^v?22\.(\d+)/);
+        if (exact && Number(exact[1]) < 22 && /^\^?12(\.|$)/.test(npm.npmVersion)) {
+          add({ level: 'warning', line: lineOf(setupNode), code: 'node-too-old-for-npm-12', message: `Job \`${jobId}\` pins Node ${nodeVersion}, but npm 12 needs Node 22.22.2+. Use node-version 22 or 24, or pass --npm-version ^11.5.1.` });
+        }
       }
     }
 
@@ -407,11 +426,11 @@ function defaultPermissions(tools: PublishTool[]): Record<string, string> {
  * one-line `{ ... }` map) can't be applied together, so the file is re-planned
  * until it settles; the first pass's change list and findings describe it all.
  */
-export function planWorkflow(file: string, text: string, scripts: ScriptLookup, callers: string[] = []): WorkflowPlan {
-  const first = planOnce(file, text, scripts, callers);
+export function planWorkflow(file: string, text: string, scripts: ScriptLookup, callers: string[] = [], npm: NpmOptions = DEFAULT_NPM): WorkflowPlan {
+  const first = planOnce(file, text, scripts, callers, npm);
   let after = first.after;
   for (let i = 0; i < 3 && after !== text; i++) {
-    const next = planOnce(file, after, scripts, callers);
+    const next = planOnce(file, after, scripts, callers, npm);
     if (next.after === after || next.findings.some((f) => f.code === 'patch-failed')) break;
     after = next.after;
   }

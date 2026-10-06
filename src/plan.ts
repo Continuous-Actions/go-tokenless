@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findPackages, githubSlug, planPackages, type PackagePlan } from './packages.ts';
-import { planWorkflow, type WorkflowPlan } from './workflow.ts';
+import { DEFAULT_NPM_VERSION, planWorkflow, type NpmOptions, type WorkflowPlan } from './workflow.ts';
 import type { Finding } from './types.ts';
 
 export type Status =
@@ -50,14 +50,33 @@ export type PlanOptions = {
   /** Skip the npm registry lookups. */
   offline?: boolean;
   fetch?: typeof fetch;
+  /** npm version range for the inserted upgrade step (default `^12`). */
+  npmVersion?: string;
+  /** Extra arguments appended to every npm command go-tokenless generates. */
+  npmArgs?: string;
 };
+
+/** Throws a usage error for npm options that would produce a broken workflow. */
+export function checkNpmOptions(opts: PlanOptions): void {
+  if (opts.npmVersion !== undefined && !/^[\w.^~<>=*| -]+$/.test(opts.npmVersion.trim())) {
+    throw new UsageError(`--npm-version must be an npm version or range (e.g. ^12, 11.6.2), got "${opts.npmVersion}"`);
+  }
+  if (opts.npmArgs !== undefined && (/[\r\n]/.test(opts.npmArgs) || /\$\{\{/.test(opts.npmArgs))) {
+    throw new UsageError('--npm-args must be a single line without ${{ }} expressions');
+  }
+}
+
+export class UsageError extends Error {}
 
 type Internal = { plan: Plan; files: Map<string, string> };
 
 export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<Internal> {
+  checkNpmOptions(opts);
   const findings: Finding[] = [];
   const files = new Map<string, string>();
   const slug = opts.repo ?? remoteSlug(root);
+  const npm: NpmOptions = { npmVersion: opts.npmVersion?.trim() || DEFAULT_NPM_VERSION, npmArgs: opts.npmArgs?.trim() || undefined };
+  const extraArgs = npm.npmArgs ? ` ${npm.npmArgs}` : '';
   const packages = findPackages(root);
   const rootScripts = packages.find((p) => p.dir === '.')?.scripts ?? {};
   const scripts = (name: string) => rootScripts[name];
@@ -70,7 +89,7 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
 
   const workflows: WorkflowPlan[] = [];
   for (const [file, text] of texts) {
-    const wp = planWorkflow(file, text, scripts, callersOf(file));
+    const wp = planWorkflow(file, text, scripts, callersOf(file), npm);
     if (wp.jobs.length === 0 && wp.findings.length === 0) continue;
     workflows.push(wp);
     findings.push(...wp.findings);
@@ -93,6 +112,15 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
 
   // Version floors read from the root package.json.
   if (publishing.length > 0) versionFindings(root, publishing, findings);
+  if (publishing.length > 0 && npm.npmVersion !== DEFAULT_NPM_VERSION) {
+    // Lowest version the range allows, e.g. "^11.2" -> 11.2.0, "11" -> 11.0.0.
+    const m = npm.npmVersion.match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+    const low = m ? [Number(m[1]), Number(m[2] ?? 0), Number(m[3] ?? 0)] : [99, 0, 0];
+    const tooOld = low[0]! < 11 || (low[0] === 11 && (low[1]! < 5 || (low[1] === 5 && low[2]! < 1)));
+    findings.push(tooOld
+      ? { level: 'error', file: '.github/workflows', code: 'npm-version-too-old', message: `--npm-version ${npm.npmVersion} is older than npm 11.5.1, which trusted publishing needs.` }
+      : { level: 'warning', file: '.github/workflows', code: 'npm-version-override', message: `Using npm@${npm.npmVersion} instead of the tested ${DEFAULT_NPM_VERSION}. A different npm major may change how publishing or trusted publishing behaves and can break the release; test it before relying on it.` });
+  }
 
   // Which packages each publishing workflow covers (best effort).
   const trust: TrustCommand[] = [];
@@ -107,7 +135,7 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
         const parts = ['npm trust github', p.name, '--repo', slug ?? '<owner>/<repo>', '--file', w.trustFile];
         if (env) parts.push('--env', env);
         parts.push('--allow-publish', '--yes');
-        trust.push({ package: p.name, workflow: w.trustFile, environment: env, command: parts.join(' ') });
+        trust.push({ package: p.name, workflow: w.trustFile, environment: env, command: parts.join(' ') + extraArgs });
       }
     }
   }

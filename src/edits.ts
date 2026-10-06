@@ -38,7 +38,9 @@ export class Source {
 }
 
 export function applyEdits(text: string, edits: TextEdit[]): string {
-  const sorted = [...edits].sort((a, b) => b.start - a.start || b.end - a.end);
+  // Apply back to front. Inserts at the same offset are applied last-pushed
+  // first, so they end up in the order they were pushed.
+  const sorted = edits.map((e, i) => ({ e, i })).sort((a, b) => b.e.start - a.e.start || b.e.end - a.e.end || b.i - a.i).map((x) => x.e);
   let out = text;
   let floor = Infinity;
   for (const e of sorted) {
