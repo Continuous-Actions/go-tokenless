@@ -554,3 +554,23 @@ jobs:
     expect(out.match(/NPM_READ_TOKEN/g)).toHaveLength(1);
   });
 });
+
+describe('repository field', () => {
+  const wf = 'on: push\njobs:\n  rel:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - uses: actions/setup-node@v6\n        with:\n          node-version: 24\n          registry-url: https://registry.npmjs.org\n      - run: npm publish\n        env:\n          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}\n';
+  it.each([
+    ['https://github.com/acme/widgets.git', false],
+    ['git+https://github.com/acme/widgets.git', false],
+    ['git@github.com:acme/widgets.git', false],
+    ['http://github.com/acme/widgets', true],
+    ['https://mirror.example/github.com/acme/widgets', true],
+    ['acme/widgets', true],
+    ['github:acme/widgets', true],
+    ['https://github.com/ACME/Widgets.git', true],
+  ])('%s rewritten: %s', (url, rewritten) => {
+    const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url } }) });
+    const p = plan(root).plan;
+    expect(p.changes.some((c: any) => c.file === 'package.json')).toBe(rewritten);
+    run(root, 'apply');
+    expect(plan(root).plan.changes.filter((c: any) => c.file === 'package.json')).toEqual([]);
+  });
+});

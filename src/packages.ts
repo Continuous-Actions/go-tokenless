@@ -147,7 +147,7 @@ export function planPackages(root: string, packages: PackageInfo[], slug: string
     }
     // Full GitHub URLs (https://, git+https://, git@) that already name this repo are fine as they are;
     // only shorthands (`owner/repo`, `github:owner/repo`) and missing fields are rewritten.
-    if (have === slug && p.repositoryUrl && /github\.com/i.test(p.repositoryUrl)) continue;
+    if (have === slug && p.repositoryUrl && /^((git\+)?https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)/i.test(p.repositoryUrl.trim())) continue;
     const text = readFileSync(join(root, p.file), 'utf8');
     const after = setRepository(text, canonical, p.dir === '.' ? undefined : p.dir);
     if (after && after !== text) {
