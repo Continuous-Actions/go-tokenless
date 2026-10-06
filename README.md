@@ -17,7 +17,7 @@ It reads your workflows and `package.json` files, then:
 |---|---|
 | `NODE_AUTH_TOKEN` / `NPM_TOKEN` passed to the publish step or job | Removes it (a token, even an empty one, stops npm from using OIDC) |
 | Job can't request an OIDC token | Adds `permissions: id-token: write` (keeping the permissions the job already had) |
-| Node 22 or older ships npm < 11.5.1 | Adds an `npm install -g npm@^11.5.1` step, or moves Node < 22 to 24 |
+| Node 22 or older ships npm < 11.5.1 | Adds an `npm install -g npm@^12` step (pinned to one major, see [npm version](#npm-version)), or moves Node < 22 to 24 |
 | `actions/setup-node` without `registry-url` | Adds `registry-url: https://registry.npmjs.org` |
 | `changesets/action@v1`, `JS-DevTools/npm-publish@v3` | Updates to the version that supports trusted publishing |
 | Script writes `_authToken` into `.npmrc` | Removes those lines |
@@ -101,6 +101,7 @@ Just ask: *"Move our npm publishing to trusted publishing."*
 
 ```text
 npx go-tokenless [plan|apply|mcp] [--json] [--diff] [--repo owner/repo] [--cwd dir] [--offline]
+                  [--npm-version <range>] [--npm-args "<args>"]
 ```
 
 | Option | Meaning |
@@ -109,8 +110,16 @@ npx go-tokenless [plan|apply|mcp] [--json] [--diff] [--repo owner/repo] [--cwd d
 | `--diff` | Include the diff (always on for `plan`) |
 | `--repo` | GitHub `owner/repo`, when the `origin` remote isn't GitHub |
 | `--offline` | Skip the npm registry lookup that checks each package already exists |
+| `--npm-version <range>` | npm version for the inserted upgrade step. Default `^12` |
+| `--npm-args "<args>"` | Extra arguments appended to every npm command it generates: the upgrade step and the `npm trust` commands (for example `--registry=…` or `--loglevel=warn`) |
 
-Exit codes: `0` ok, `1` blocked (errors to fix by hand), `2` usage error. Needs Node 22.14+.
+Exit codes: `0` ok, `1` blocked (errors to fix by hand), `2` usage error, `3` unexpected error. Needs Node 22.14+.
+
+### npm version
+
+When a publish job runs on a Node version whose bundled npm is too old, go-tokenless adds `npm install -g npm@^12`. It is pinned to one major on purpose: a new npm major can change how publishing behaves, and a release pipeline should not change under you. npm 12 needs Node 22.22.2+ or 24.15+; jobs pinned to an older exact Node 22 get a warning.
+
+To use a different npm, pass `--npm-version` (for example `--npm-version ^11.6.0`). go-tokenless warns that an untested version may break the release, and refuses versions older than 11.5.1, which cannot use trusted publishing.
 
 ## Troubleshooting the errors people hit
 

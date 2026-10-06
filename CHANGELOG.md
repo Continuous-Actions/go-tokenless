@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The inserted npm upgrade step is pinned to `npm@^12` (was `^11.5.1`).
+- `--npm-version <range>` overrides it, with a warning; versions below 11.5.1 are refused.
+- `--npm-args "<args>"` appends extra arguments to the npm upgrade step and the `npm trust` commands. Both options are also MCP tool inputs.
+- Warns when a job pins a Node 22 release older than npm 12 supports.
+- Fix: two lines inserted at the same spot could land in the wrong order.
+
 ## 0.1.0
 
 - First release: `plan`, `apply` and `mcp` commands.

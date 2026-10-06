@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { applyPlan, buildPlan, type Plan } from './plan.ts';
+import { applyPlan, buildPlan, checkNpmOptions, UsageError, type Plan } from './plan.ts';
 import { formatPlan } from './report.ts';
 
 const VERSION = process.env.GO_TOKENLESS_VERSION ?? '0.0.0-dev';
@@ -17,10 +17,16 @@ Options:
   --repo o/r      GitHub owner/repo (default: from git remote "origin")
   --cwd <dir>     Repository root (default: current directory)
   --offline       Skip npm registry lookups
+  --npm-version <range>
+                  npm version for the inserted upgrade step (default ^12).
+                  Other versions may break publishing; a warning is shown.
+  --npm-args "<args>"
+                  Extra arguments added to every npm command it generates
+                  (the upgrade step and the npm trust commands), e.g. "--registry=https://registry.npmjs.org"
   -h, --help      Show this help
   -v, --version   Show the version
 
-Exit codes: 0 ok, 1 blocked (errors to fix by hand), 2 usage error.
+Exit codes: 0 ok, 1 blocked (errors to fix by hand), 2 usage error, 3 unexpected error.
 Docs: https://github.com/Continuous-Actions/go-tokenless`;
 
 export async function main(argv: string[]): Promise<number> {
@@ -44,19 +50,27 @@ export async function main(argv: string[]): Promise<number> {
   const diff = flag('--diff');
   const offline = flag('--offline');
   const repo = value('--repo');
+  const npmVersion = value('--npm-version');
+  const npmArgs = value('--npm-args');
   const cwd = resolve(value('--cwd') ?? '.');
   const command = args.shift() ?? 'plan';
   if (args.length > 0) { console.error(`Unknown argument: ${args[0]}\n\n${HELP}`); return 2; }
   if (repo !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(repo)) { console.error('--repo must look like owner/repo'); return 2; }
 
+  try {
+    checkNpmOptions({ npmVersion, npmArgs });
+  } catch (e) {
+    console.error(String((e as Error).message));
+    return 2;
+  }
   if (command === 'mcp') {
     const { serve } = await import('./mcp.ts');
     serve(VERSION);
     return -1; // keep running
   }
   let plan: Plan;
-  if (command === 'plan') plan = (await buildPlan(cwd, { repo, offline })).plan;
-  else if (command === 'apply') plan = await applyPlan(cwd, { repo, offline });
+  if (command === 'plan') plan = (await buildPlan(cwd, { repo, offline, npmVersion, npmArgs })).plan;
+  else if (command === 'apply') plan = await applyPlan(cwd, { repo, offline, npmVersion, npmArgs });
   else { console.error(`Unknown command: ${command}\n\n${HELP}`); return 2; }
 
   console.log(json ? JSON.stringify(plan, null, 2) : formatPlan(plan, { diff: diff || command === 'plan' }));
@@ -65,5 +79,5 @@ export async function main(argv: string[]): Promise<number> {
 
 main(process.argv.slice(2)).then(
   (code) => { if (code >= 0) process.exitCode = code; },
-  (err) => { console.error(`go-tokenless: ${err instanceof Error ? err.message : String(err)}`); process.exitCode = 2; },
+  (err) => { console.error(`go-tokenless: ${err instanceof Error ? err.message : String(err)}`); process.exitCode = err instanceof UsageError ? 2 : 3; },
 );

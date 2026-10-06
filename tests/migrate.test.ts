@@ -107,7 +107,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22.x, registry-url: https://registry.npmjs.org }
       - name: Use an npm version that supports trusted publishing
-        run: npm install -g npm@^11.5.1
+        run: npm install -g npm@^12
       - name: Publish
         run: |
           npm publish
@@ -294,5 +294,67 @@ describe('cli', () => {
     expect(plan(root).plan.repository).toBeUndefined();
     expect(plan(root).plan.trust[0].command).toContain('--repo <owner>/<repo>');
     expect(plan(root, '--repo', 'me/mine').plan.trust[0].command).toContain('--repo me/mine');
+  });
+});
+
+describe('npm version and extra args', () => {
+  const NODE22 = `on: push
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+`;
+  const files = { '.github/workflows/p.yml': NODE22, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) };
+
+  it('pins the npm upgrade to major 12 by default, with no warning', () => {
+    const root = makeRepo(files);
+    const p = plan(root).plan;
+    expect(p.findings.map((f: any) => f.code)).not.toContain('npm-version-override');
+    run(root, 'apply');
+    expect(read(root, '.github/workflows/p.yml')).toContain('      - name: Use an npm version that supports trusted publishing\n        run: npm install -g npm@^12\n      - run: npm publish\n');
+  });
+
+  it('accepts an override with a warning, and appends custom args everywhere', () => {
+    const root = makeRepo(files);
+    const p = plan(root, '--npm-version', '^11.6.0', '--npm-args', '--registry=https://registry.npmjs.org --loglevel=warn').plan;
+    expect(p.status).toBe('ready');
+    expect(p.findings.find((f: any) => f.code === 'npm-version-override').level).toBe('warning');
+    expect(p.trust[0].command).toBe('npm trust github p --repo acme/widgets --file p.yml --allow-publish --yes --registry=https://registry.npmjs.org --loglevel=warn');
+    run(root, 'apply', '--npm-version', '^11.6.0', '--npm-args', '--registry=https://registry.npmjs.org --loglevel=warn');
+    expect(read(root, '.github/workflows/p.yml')).toContain('run: npm install -g npm@^11.6.0 --registry=https://registry.npmjs.org --loglevel=warn\n');
+  });
+
+  it('quotes args that would break YAML', () => {
+    const root = makeRepo(files);
+    run(root, 'apply', '--npm-args', '--foo="a: b" # x');
+    expect(read(root, '.github/workflows/p.yml')).toContain(`run: 'npm install -g npm@^12 --foo="a: b" # x'\n`);
+  });
+
+  it('blocks npm versions without trusted publishing', () => {
+    const root = makeRepo(files);
+    const p = plan(root, '--npm-version', '^11.4.0');
+    expect(p.code).toBe(1);
+    expect(p.plan.findings.find((f: any) => f.level === 'error').code).toBe('npm-version-too-old');
+    expect(plan(root, '--npm-version', '10').plan.status).toBe('blocked');
+  });
+
+  it('rejects invalid values', () => {
+    const root = makeRepo(files);
+    expect(run(root, '--npm-version', 'latest; rm -rf /').code).toBe(2);
+    expect(run(root, '--npm-args', '${{ secrets.X }}').code).toBe(2);
+  });
+
+  it('warns when an exact Node 22 is too old for npm 12', () => {
+    const root = makeRepo({ ...files, '.github/workflows/p.yml': NODE22.replace('node-version: 22', 'node-version: 22.14.0') });
+    expect(plan(root).plan.findings.map((f: any) => f.code)).toContain('node-too-old-for-npm-12');
   });
 });
