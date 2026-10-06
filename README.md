@@ -145,6 +145,13 @@ npx go-tokenless [plan | apply | mcp] [options]
 
 Exit codes: `0` ok · `1` blocked (needs a human fix) · `2` usage error · `3` unexpected error.
 
+## What it accesses
+
+- **Files:** it reads `.github/workflows/*.yml`, `package.json` files and related scripts in the repository you point it at. `apply` and the `apply_trusted_publishing` MCP tool write only to workflow and `package.json` files inside that repository. It never follows links out of the repository.
+- **Network:** read-only `GET` requests to `https://registry.npmjs.org/<package>` to check that each package already exists (`--offline` or MCP `offline: true` turns this off). Nothing else is fetched or sent. There is no telemetry.
+- **Never:** it doesn't run repository code, read secrets or environment tokens, run git commands that change anything, or contact npm or GitHub on your behalf.
+- **Running it:** the Claude Code plugin and the Gemini extension start the MCP server with `npx -y go-tokenless@<pinned version> mcp`.
+
 ## What only you can do
 
 go-tokenless never touches your npm account, secrets or git history. After `apply`:

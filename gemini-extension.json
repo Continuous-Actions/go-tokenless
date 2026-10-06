@@ -6,7 +6,11 @@
   "mcpServers": {
     "go-tokenless": {
       "command": "npx",
-      "args": ["-y", "go-tokenless", "mcp"]
+      "args": [
+        "-y",
+        "go-tokenless@1.0.0",
+        "mcp"
+      ]
     }
   }
 }
