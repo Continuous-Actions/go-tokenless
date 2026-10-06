@@ -89,7 +89,7 @@ function commandTool(cmd: string): PublishTool | undefined {
   if (/(^|\s)(--dry-run|-n)(\s|=|$)/.test(cmd)) return undefined;
   let w = cmd.replace(/^(\w+=\S*\s+)*/, '').replace(/^(npx|pnpx|pnpm\s+exec|pnpm\s+dlx|yarn\s+dlx|yarn\s+exec|bunx)\s+(-y\s+|--yes\s+)?/, '').split(/\s+/);
   // `pnpm semantic-release` / `yarn lerna publish` run a package binary.
-  if (/^(pnpm|yarn|bun)$/.test(w[0] ?? '') && w[1] && !PM_COMMANDS.has(w[1])) w = w.slice(1);
+  if (/^(pnpm|yarn|bun)$/.test(w[0] ?? '') && w[1] && !w[1].startsWith('-') && !PM_COMMANDS.has(w[1])) w = w.slice(1);
   // node_modules/.bin/semantic-release, semantic-release@19.0.5
   w[0] = (w[0] ?? '').split('/').pop()!.replace(/@[\w.^~-]*$/, '');
   const [a, b] = w;
@@ -223,7 +223,12 @@ function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, call
   } catch {
     return empty;
   }
-  if (doc.errors.length > 0 || !isMap(doc.contents)) return empty;
+  if (doc.errors.length > 0 || !isMap(doc.contents)) {
+    if (doc.errors.length > 0 && /publish|NPM_TOKEN|NODE_AUTH_TOKEN/.test(text)) {
+      findings.push({ file, level: 'warning', line: 1, code: 'invalid-yaml', message: `Could not parse this workflow (${doc.errors[0]!.message.split('\n')[0]}), so it was not checked. GitHub may reject it too.` });
+    }
+    return empty;
+  }
   const src = new Source(text);
   const unit = indentUnit(doc, src);
   const root = doc.contents as YAMLMap;
@@ -316,16 +321,17 @@ function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, call
 
     // Token references to remove.
     const tokenEdits: TextEdit[] = [];
-    const removeTokens = (envMap: unknown, where: string, parent?: Pair<any, any>) => {
+    const removeTokens = (envMap: unknown, where: string, parent?: Pair<any, any>, container?: YAMLMap) => {
       if (!isMap(envMap)) return 0;
+      if (container?.flow) return 0; // one-line `{ ... }` step: reported below, edited by hand
       const hits = (envMap.items as Pair<any, any>[]).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value) && !isGithubToken(p.value));
       if (hits.length === 0) return 0;
       if (envMap.flow) {
         const keep = (envMap.items as Pair<any, any>[]).filter((p) => !hits.includes(p));
-        if (keep.length === 0 && parent) tokenEdits.push(deletePair(src, parent));
-        else tokenEdits.push({ start: envMap.range![0], end: envMap.range![1], text: `{ ${keep.map((p) => src.text.slice((p.key as Node).range![0], (p.value as Node).range![1])).join(', ')} }` });
+        if (keep.length === 0 && parent) tokenEdits.push(deletePair(src, parent, container));
+        else tokenEdits.push({ start: envMap.range![0], end: envMap.range![1], text: `{ ${keep.map((p) => src.text.slice((p.key as Node).range![0], ((p.value as Node | null)?.range ?? (p.key as Node).range!)[1])).join(', ')} }` });
       } else if (hits.length === envMap.items.length && parent) {
-        tokenEdits.push(deletePair(src, parent));
+        tokenEdits.push(deletePair(src, parent, container));
       } else {
         for (const h of hits) tokenEdits.push(deletePair(src, h));
       }
@@ -335,17 +341,26 @@ function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, call
     };
     let tokenRefs = 0;
     for (const { s } of publishSteps) {
-      tokenRefs += removeTokens(get(s, 'env'), `step "${str(get(s, 'name')) ?? str(get(s, 'uses')) ?? 'run'}" env`, getPair(s, 'env'));
+      tokenRefs += removeTokens(get(s, 'env'), `step "${str(get(s, 'name')) ?? str(get(s, 'uses')) ?? 'run'}" env`, getPair(s, 'env'), s);
+      if (s.flow && isMap(get(s, 'env')) && ((get(s, 'env') as YAMLMap).items as Pair<any, any>[]).some((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value) && !isGithubToken(p.value))) {
+        tokenRefs++;
+        add({ level: 'warning', line: lineOf(s), code: 'one-line-step', message: `Job \`${jobId}\` passes an npm token to a one-line \`{ ... }\` step. Remove that env entry by hand.` });
+      }
       const withMap = get(s, 'with');
       const tokenInput = getPair(withMap, 'token');
       if ((str(get(s, 'uses')) ?? '').toLowerCase().startsWith('js-devtools/npm-publish') && tokenInput && usesSecret(tokenInput.value)) {
-        tokenEdits.push(isMap(withMap) && withMap.items.length === 1 ? deletePair(src, getPair(s, 'with')!) : deletePair(src, tokenInput));
+        if (isMap(withMap) && withMap.flow) {
+          const keep = (withMap.items as Pair<any, any>[]).filter((p) => p !== tokenInput);
+          tokenEdits.push(keep.length === 0 ? deletePair(src, getPair(s, 'with')!, s) : { start: withMap.range![0], end: withMap.range![1], text: `{ ${keep.map((p) => src.text.slice((p.key as Node).range![0], ((p.value as Node | null)?.range ?? (p.key as Node).range!)[1])).join(', ')} }` });
+        } else {
+          tokenEdits.push(isMap(withMap) && withMap.items.length === 1 ? deletePair(src, getPair(s, 'with')!, s) : deletePair(src, tokenInput, withMap as YAMLMap));
+        }
         noteSecret(tokenInput.value);
         changes.push(`${jobId}: remove the \`token\` input from JS-DevTools/npm-publish`);
         tokenRefs++;
       }
     }
-    const jobEnvRemoved = removeTokens(get(job, 'env'), 'job env', getPair(job, 'env'));
+    const jobEnvRemoved = removeTokens(get(job, 'env'), 'job env', getPair(job, 'env'), job);
     tokenRefs += jobEnvRemoved;
 
     // Installs of private packages still need a (read-only) token; publishing must not have one.
@@ -520,8 +535,13 @@ function planOnce(file: string, text: string, scripts: Repo | ScriptLookup, call
   // Workflow-level env tokens.
   if (active && isMap(rootEnv)) {
     const hits = (rootEnv.items as Pair<any, any>[]).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value) && !isGithubToken(p.value));
+    const keep = (rootEnv.items as Pair<any, any>[]).filter((p) => !hits.includes(p));
+    if (hits.length > 0 && rootEnv.flow && keep.length > 0) {
+      edits.push({ start: rootEnv.range![0], end: rootEnv.range![1], text: `{ ${keep.map((p) => src.text.slice((p.key as Node).range![0], ((p.value as Node | null)?.range ?? (p.key as Node).range!)[1])).join(', ')} }` });
+    }
     for (const h of hits) {
-      edits.push(rootEnv.items.length === hits.length ? deletePair(src, getPair(root, 'env')!) : deletePair(src, h));
+      if (keep.length === 0) edits.push(deletePair(src, getPair(root, 'env')!, root));
+      else if (!rootEnv.flow) edits.push(deletePair(src, h, rootEnv as YAMLMap));
       noteSecret(h.value);
       changes.push(`workflow: remove \`${str(h.key)}\` from top-level env`);
     }

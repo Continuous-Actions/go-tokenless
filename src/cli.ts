@@ -44,6 +44,7 @@ export async function main(argv: string[]): Promise<number> {
     const i = args.indexOf(name);
     if (i < 0) return undefined;
     const v = args[i + 1];
+    if (v === undefined || (v.startsWith('--') && name !== '--npm-args')) throw new UsageError(`${name} needs a value`);
     args.splice(i, 2);
     return v;
   };

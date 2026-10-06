@@ -117,7 +117,7 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
   // A workflow that hands an npm token to a job but whose publish command we can't see
   // (a script outside the repo, a third-party action): say so instead of "nothing to do".
   for (const [file, text] of texts) {
-    if (publishing.some((w) => w.file === file)) continue;
+    if (workflows.some((w) => w.file === file)) continue; // publishing, or deliberately skipped (another registry)
     const m = text.match(/^\s*([A-Z_]*NPM[A-Z_]*TOKEN|NODE_AUTH_TOKEN|YARN_NPM_AUTH_TOKEN)\s*:\s*['"]?\$\{\{[^}]*\bsecrets\b/m);
     if (m && !/secrets\.GITHUB_TOKEN/.test(m[0])) {
       findings.push({ level: 'error', file, code: 'publish-not-found', message: `Passes \`${m[1]}\` from a secret, but go-tokenless could not find the command that publishes (it may be inside an action or a script it can't read). Migrate this workflow by hand: grant \`id-token: write\` to the publishing job and remove the token.` });
@@ -210,7 +210,7 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
   }
   const hasErrors = findings.some((f) => f.level === 'error');
   const allTokenless = publishing.length > 0 && publishing.every((w) => w.jobs.every((j) => j.alreadyTokenless));
-  const status: Status = publishing.length === 0 ? 'no-publish-workflow' : hasErrors ? 'blocked' : allTokenless && changes.length === 0 ? 'already-tokenless' : 'ready';
+  const status: Status = hasErrors ? 'blocked' : publishing.length === 0 ? 'no-publish-workflow' : allTokenless && changes.length === 0 ? 'already-tokenless' : 'ready';
 
   const plan: Plan = {
     version: 1,

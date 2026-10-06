@@ -1,13 +1,18 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 export const CLI = resolve('dist/cli.js');
 
+// Temp repos are removed when the test process exits.
+const made: string[] = [];
+process.on('exit', () => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
+
 /** Create a git repo with an `origin` remote and the given files. */
 export function makeRepo(files: Record<string, string>, remote = 'https://github.com/acme/widgets.git'): string {
   const root = mkdtempSync(join(tmpdir(), 'go-tokenless-'));
+  made.push(root);
   for (const [f, text] of Object.entries(files)) {
     mkdirSync(dirname(join(root, f)), { recursive: true });
     writeFileSync(join(root, f), text);
