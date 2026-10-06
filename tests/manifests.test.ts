@@ -11,6 +11,11 @@ describe('release manifests', () => {
     expect(server.packages.map((p: any) => p.version)).toEqual([version]);
     expect(json('.claude-plugin/plugin.json').version).toBe(version);
     expect(json('gemini-extension.json').version).toBe(version);
+    // Plugin directories require the npx launcher to be pinned to an exact version.
+    for (const f of ['.claude-plugin/plugin.json', 'gemini-extension.json']) {
+      expect(json(f).mcpServers['go-tokenless'].args).toEqual(['-y', `go-tokenless@${version}`, 'mcp']);
+    }
+    expect(json('.claude-plugin/plugin.json').author.name).toBe('Continuous-Actions');
   });
 
   it('use the npm mcpName as the registry name', () => {
