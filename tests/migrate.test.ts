@@ -333,10 +333,12 @@ jobs:
     expect(read(root, '.github/workflows/p.yml')).toContain('run: npm install -g npm@^11.6.0 --registry=https://registry.npmjs.org --loglevel=warn\n');
   });
 
-  it('quotes args that would break YAML', () => {
+  it('rejects shell syntax in --npm-args and --npm-version', () => {
     const root = makeRepo(files);
-    run(root, 'apply', '--npm-args', '--foo="a: b" # x');
-    expect(read(root, '.github/workflows/p.yml')).toContain(`run: 'npm install -g npm@^12 --foo="a: b" # x'\n`);
+    expect(run(root, '--npm-args', '--foo="a: b" # x').code).toBe(2);
+    expect(run(root, '--npm-args', '--foo; curl x | sh').code).toBe(2);
+    expect(run(root, '--npm-version', '>=11.5.1').code).toBe(2);
+    expect(run(root, '--npm-version', '12 || sh').code).toBe(2);
   });
 
   it('blocks npm versions without trusted publishing', () => {
@@ -446,5 +448,39 @@ ${steps.map((s) => `      - run: ${s}`).join('\n')}
     const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) });
     const changed = plan(root, '--read-token', 'NPM_READ_TOKEN').plan.changes.map((c: any) => c.description).filter((d: string) => d.includes('read-only token'));
     expect(changed.map((d: string) => d.match(/step "([^"]+)"/)![1])).toEqual(['yarn', 'yarn install --immutable', 'yarn --frozen-lockfile', 'npm ci', 'pnpm i', 'bun install']);
+  });
+});
+
+describe('read token across jobs', () => {
+  it('also gives install steps in build/test jobs of the release workflow the read token', () => {
+    const wf = `on: push
+env:
+  NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm ci
+      - run: npm test
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm publish
+`;
+    const root = makeRepo({ '.github/workflows/r.yml': wf, 'package.json': pkg({ name: 'p', version: '1.0.0', repository: { type: 'git', url: 'git+https://github.com/acme/widgets.git' } }) });
+    run(root, 'apply', '--read-token', 'NPM_READ_TOKEN');
+    const out = read(root, '.github/workflows/r.yml');
+    expect(out).not.toContain('secrets.NPM_TOKEN');
+    expect(out.match(/NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_READ_TOKEN \}\}/g)).toHaveLength(2);
+    expect(out).toContain('      - run: npm test\n');
+    expect(plan(root, '--read-token', 'NPM_READ_TOKEN').plan.status).toBe('already-tokenless');
   });
 });

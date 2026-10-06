@@ -73,7 +73,10 @@ const RUN_PATTERNS: Array<[RegExp, PublishTool]> = [
 /** Publishing tools a shell snippet invokes, following `npm run x` / `yarn x` one level into package.json scripts. */
 export function toolsInRun(run: string, scripts: ScriptLookup, depth = 0): PublishTool[] {
   const out = new Set<PublishTool>();
-  for (const [re, tool] of RUN_PATTERNS) if (re.test(run)) out.add(tool);
+  // Dry runs and `npm pack` don't publish, so they never get id-token or a trusted publisher.
+  const real = run.split('\n').filter((l) => !/--dry-run\b|\s-n\s/.test(l)).join('\n');
+  for (const [re, tool] of RUN_PATTERNS) if (re.test(real)) out.add(tool);
+  run = real;
   if (depth < 2) {
     for (const m of run.matchAll(/\b(?:npm\s+run|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun\s+run)\s+([\w:.-]+)/g)) {
       const body = scripts(m[1]!);
@@ -98,7 +101,27 @@ function stepTools(step: YAMLMap, scripts: ScriptLookup): PublishTool[] {
 }
 
 /** A token value: a secret reference, or a blank string (which also breaks OIDC). */
-const usesSecret = (v: unknown) => /\$\{\{\s*secrets\./.test(str(v) ?? '') || (str(v) ?? 'x').trim() === '';
+const usesSecret = (v: unknown) => /\bsecrets\s*(\.|\[)/.test(str(v) ?? '') || (str(v) ?? 'x').trim() === '';
+/** Env names that carry an npm auth token (beyond the common ones in TOKEN_KEYS). */
+const isTokenKey = (k: string) => TOKEN_KEYS.has(k) || /^(YARN_NPM_AUTH_TOKEN|NPM_CONFIG__AUTH(TOKEN)?)$/i.test(k) || /NPM\w*TOKEN|TOKEN\w*NPM/i.test(k);
+
+/** actions/setup-node used when a SHA-pinned job has none (kept current by Dependabot in this repo's tests). */
+const SETUP_NODE_SHA = '820762786026740c76f36085b0efc47a31fe5020';
+const SETUP_NODE_TAG = 'v7.0.0';
+
+const READ_ALL_SCOPES =['actions', 'attestations', 'checks', 'contents', 'deployments', 'discussions', 'issues', 'models', 'packages', 'pages', 'pull-requests', 'security-events', 'statuses'];
+
+const UNTRUSTED_TRIGGERS =new Set(['pull_request_target', 'workflow_run', 'issue_comment', 'pull_request_review', 'pull_request_review_comment', 'discussion', 'discussion_comment', 'issues', 'fork', 'watch']);
+
+/** True only for https://registry.npmjs.org (not lookalike hosts). */
+export function isNpmRegistry(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && u.host === 'registry.npmjs.org' && !u.username && !u.password;
+  } catch {
+    return false;
+  }
+}
 const isAuthTokenWriter = (run: string) => /_authToken|npm\s+config\s+set\s+[^\n]*:_auth/.test(run);
 
 function majorOf(v: string | undefined): number | undefined {
@@ -127,13 +150,30 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
   const root = doc.contents as YAMLMap;
   const on = get(root, 'on') ?? get(root, true as any);
   const reusable = isMap(on) ? getPair(on, 'workflow_call') !== undefined : str(on) === 'workflow_call' || (isSeq(on) && on.items.some((i) => str(i) === 'workflow_call'));
+  const triggers = isMap(on) ? (on.items as Pair<any, any>[]).map((p) => str(p.key) ?? '') : isSeq(on) ? on.items.map((i) => str(i) ?? '') : [str(on) ?? ''];
+  // Events a stranger can fire (fork PRs, comments, runs of other workflows). A job they
+  // reach must never get id-token: write or be named as a trusted publisher.
+  const untrusted = triggers.filter((t) => UNTRUSTED_TRIGGERS.has(t));
   const jobsMap = get(root, 'jobs');
   if (!isMap(jobsMap)) return { ...empty, reusable };
   const edits: TextEdit[] = [];
   const lineOf = (n: Node) => src.lineOf(n.range![0]) + 1;
   const jobs: JobPlan[] = [];
   const add = (f: Omit<Finding, 'file'>) => findings.push({ file, ...f });
-  const noteSecret = (v: unknown) => { for (const m of (str(v) ?? '').matchAll(/secrets\.([\w-]+)/g)) secrets.add(m[1]!); };
+  const noteSecret = (v: unknown) => { for (const m of (str(v) ?? '').matchAll(/secrets\s*(?:\.([\w-]+)|\[\s*['"]([\w-]+)['"]\s*\])/g)) secrets.add((m[1] ?? m[2])!); };
+
+  /** Add the read-only token to install steps that don't have a NODE_AUTH_TOKEN yet. */
+  const giveReadToken = (jobId: string, installSteps: YAMLMap[]): TextEdit[] => {
+    const value = `\${{ secrets.${npm.readTokenSecret} }}`;
+    const out: TextEdit[] = [];
+    for (const s of installSteps) {
+      const env = get(s, 'env');
+      if (getPair(env, 'NODE_AUTH_TOKEN')) continue; // already has one
+      out.push(isMap(env) ? addPair(src, env, 'NODE_AUTH_TOKEN', value, { unit }) : addPair(src, s, 'env', { NODE_AUTH_TOKEN: value }, { unit }));
+      changes.push(`${jobId}: give step "${str(get(s, 'name')) ?? str(get(s, 'run'))?.split('\n')[0]}" the read-only token \`${npm.readTokenSecret}\` for private packages`);
+    }
+    return out;
+  };
 
   // Workflow-level env tokens are removed only when every job using them publishes.
   const rootEnv = get(root, 'env');
@@ -155,12 +195,21 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     // Registry: skip jobs that publish somewhere other than npmjs.org.
     const setupNode = stepMaps.find((s) => (str(get(s, 'uses')) ?? '').toLowerCase().startsWith('actions/setup-node'));
     const registry = str(get(get(setupNode, 'with'), 'registry-url'));
-    if (registry && !registry.replace(/\/+$/, '').startsWith(NPM_REGISTRY)) {
+    if (registry && !isNpmRegistry(registry)) {
       add({ level: 'info', line: lineOf(jobPair.key), code: 'other-registry', message: `Job \`${jobId}\` publishes to ${registry}, not npmjs.org. Trusted publishing only applies to the npm registry, so it is left alone.` });
       continue;
     }
 
     const plan: JobPlan = { job: jobId, line: jobLine, tools, alreadyTokenless: false, blocked: false };
+    if (untrusted.length > 0) {
+      add({ level: 'error', line: jobLine, code: 'untrusted-trigger', message: `Job \`${jobId}\` publishes in a workflow triggered by ${untrusted.map((t) => `\`${t}\``).join(', ')}, which people outside the repo can start. Giving it \`id-token: write\` or a trusted publisher would let them publish. Move publishing to a workflow that runs on \`release\`, \`push\` to a tag or branch, or \`workflow_dispatch\`.` });
+      plan.blocked = true;
+      jobs.push(plan);
+      continue;
+    }
+    if (triggers.includes('pull_request')) {
+      add({ level: 'warning', line: jobLine, code: 'pull-request-trigger', message: `Job \`${jobId}\` publishes in a workflow that also runs on \`pull_request\`. Make sure the publish step only runs for pushes or releases (for example \`if: github.event_name != 'pull_request'\`).` });
+    }
     const envNode = get(job, 'environment');
     plan.environment = str(envNode) ?? str(get(envNode, 'name'));
     if (plan.environment?.includes('${{')) {
@@ -184,7 +233,7 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     const tokenEdits: TextEdit[] = [];
     const removeTokens = (envMap: unknown, where: string, parent?: Pair<any, any>) => {
       if (!isMap(envMap)) return 0;
-      const hits = (envMap.items as Pair<any, any>[]).filter((p) => TOKEN_KEYS.has(str(p.key) ?? '') && usesSecret(p.value));
+      const hits = (envMap.items as Pair<any, any>[]).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value));
       if (hits.length === 0) return 0;
       if (envMap.flow) {
         const keep = (envMap.items as Pair<any, any>[]).filter((p) => !hits.includes(p));
@@ -221,13 +270,16 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     for (const s of npm.readTokenSecret ? publishSteps.map((x) => x.s).filter((s) => isInstallRun(str(get(s, 'run')) ?? '')) : []) {
       add({ level: 'warning', line: lineOf(s), code: 'install-and-publish-in-one-step', message: `Job \`${jobId}\` installs and publishes in the same step. If the install needs private packages, split it into its own step so it can get a read-only token without blocking OIDC on publish.` });
     }
-    if (npm.readTokenSecret) {
-      const value = `\${{ secrets.${npm.readTokenSecret} }}`;
-      for (const s of installSteps) {
-        const env = get(s, 'env');
-        if (getPair(env, 'NODE_AUTH_TOKEN')) continue; // already has one
-        installEdits.push(isMap(env) ? addPair(src, env, 'NODE_AUTH_TOKEN', value, { unit }) : addPair(src, s, 'env', { NODE_AUTH_TOKEN: value }, { unit }));
-        changes.push(`${jobId}: give step "${str(get(s, 'name')) ?? str(get(s, 'run'))?.split('\n')[0]}" the read-only token \`${npm.readTokenSecret}\` for private packages`);
+    if (npm.readTokenSecret) installEdits.push(...giveReadToken(jobId, installSteps));
+    // Any other step in the publish job that still receives an npm token secret (for
+    // example a script that writes .npmrc) keeps token publishing alive: report it.
+    for (const s of stepMaps) {
+      if (publishSet.has(s) || installSteps.includes(s)) continue;
+      const left = ((get(s, 'env') as YAMLMap | undefined)?.items as Pair<any, any>[] | undefined ?? []).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value) && (str(p.value) ?? '').trim() !== '');
+      for (const p of left) {
+        noteSecret(p.value);
+        tokenRefs++;
+        add({ level: 'warning', line: lineOf(s), code: 'secret-in-publish-job', message: `Step "${str(get(s, 'name')) ?? str(get(s, 'run'))?.split('\n')[0] ?? str(get(s, 'uses'))}" in job \`${jobId}\` still gets \`${str(p.key)}\` from a secret. If it sets up npm auth, remove it; otherwise the old token keeps publishing.` });
       }
     }
     // Steps that only write a token into .npmrc are deleted; mixed scripts are flagged.
@@ -269,15 +321,20 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
         const existing = getPair(perms, 'id-token');
         permEdits.push(existing ? { start: (existing.value as Node).range![0], end: (existing.value as Node).range![1], text: 'write' } : addPair(src, perms, 'id-token', 'write', { unit }));
       } else if (permPair && str(perms) === 'read-all') {
-        add({ level: 'warning', line: lineOf(permPair.key), code: 'read-all-permissions', message: `Job \`${jobId}\` uses \`permissions: read-all\`. Replace it with an explicit map that includes \`id-token: write\`.` });
+        // Keep read-all's meaning: every scope read-only, plus id-token.
+        const node = perms as Node;
+        permEdits.push({ start: node.range![0], end: node.range![1], text: `{ ${[...READ_ALL_SCOPES.map((k) => `${k}: read`), 'id-token: write'].join(', ')} }` });
       } else {
         // No job permissions: inherit the workflow's (or the repo default) and add id-token.
         const base: Record<string, string> = {};
         if (isMap(rootPerms)) for (const p of rootPerms.items as Pair<any, any>[]) base[str(p.key)!] = str(p.value)!;
+        else if (str(rootPerms) === 'read-all') for (const k of READ_ALL_SCOPES) base[k] = 'read';
         else Object.assign(base, defaultPermissions(tools));
         base['id-token'] = 'write';
         permEdits.push(addPair(src, job, 'permissions', base, { before: 'steps', unit }));
-        if (!isMap(rootPerms)) add({ level: 'info', line: jobLine, code: 'permissions-added', message: `Job \`${jobId}\` had no permissions block, so one was added with ${Object.keys(base).filter((k) => k !== 'id-token').join(', ')} for ${tools.join('/')} plus \`id-token: write\`. Check it covers anything else the job does.` });
+        if (rootPerms === undefined && Object.values(base).filter((v) => v === 'write').length > 1) {
+          add({ level: 'warning', line: jobLine, code: 'permissions-added', message: `Job \`${jobId}\` had no permissions block, so it ran with the repository's default token permissions. One was added with ${Object.entries(base).filter(([k]) => k !== 'id-token').map(([k, v]) => `${k}: ${v}`).join(', ')}, which ${tools.join('/')} normally needs, plus \`id-token: write\`. Remove any write scope the job does not use.` });
+        }
       }
       changes.push(`${jobId}: grant \`id-token: write\``);
     }
@@ -287,7 +344,10 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     const firstPublish = publishSteps[0]!.s;
     const npmBased = tools.some((t) => t !== 'yarn' && t !== 'bun');
     if (!setupNode) {
-      setupEdits.push(insertStepBefore(src, firstPublish, [['uses', 'actions/setup-node@v7'], ['with', { 'node-version': '24', 'registry-url': NPM_REGISTRY }]], unit));
+      // Match the job's pinning style: SHA-pinned jobs get a SHA-pinned setup-node.
+      const pinned = stepMaps.some((s) => /@[0-9a-f]{40}\b/i.test(str(get(s, 'uses')) ?? ''));
+      const setupRef = pinned ? `actions/setup-node@${SETUP_NODE_SHA} # ${SETUP_NODE_TAG}` : 'actions/setup-node@v7';
+      setupEdits.push(insertStepBefore(src, firstPublish, [['uses', setupRef], ['with', { 'node-version': '24', 'registry-url': NPM_REGISTRY }]], unit));
       changes.push(`${jobId}: add actions/setup-node (Node 24, npm registry)`);
     } else {
       const withPair = getPair(setupNode, 'with');
@@ -357,9 +417,21 @@ function planOnce(file: string, text: string, scripts: ScriptLookup, callers: st
     jobs.push(plan);
   }
 
+  // Build and test jobs in the same workflow install private packages too.
+  const active = jobs.some((j) => !j.blocked);
+  if (npm.readTokenSecret && active) {
+    const done = new Set(jobs.map((j) => j.job));
+    for (const jobPair of (jobsMap as YAMLMap).items as Pair<any, any>[]) {
+      const id = str(jobPair.key)!;
+      const steps = get(jobPair.value, 'steps');
+      if (done.has(id) || !isSeq(steps)) continue;
+      edits.push(...giveReadToken(id, (steps.items.filter(isMap) as YAMLMap[]).filter((s) => isInstallRun(str(get(s, 'run')) ?? ''))));
+    }
+  }
+
   // Workflow-level env tokens.
-  if (jobs.length > 0 && isMap(rootEnv)) {
-    const hits = (rootEnv.items as Pair<any, any>[]).filter((p) => TOKEN_KEYS.has(str(p.key) ?? '') && usesSecret(p.value));
+  if (active && isMap(rootEnv)) {
+    const hits = (rootEnv.items as Pair<any, any>[]).filter((p) => isTokenKey(str(p.key) ?? '') && usesSecret(p.value));
     for (const h of hits) {
       edits.push(rootEnv.items.length === hits.length ? deletePair(src, getPair(root, 'env')!) : deletePair(src, h));
       noteSecret(h.value);

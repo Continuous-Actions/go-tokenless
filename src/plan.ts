@@ -60,11 +60,16 @@ export type PlanOptions = {
 
 /** Throws a usage error for npm options that would produce a broken workflow. */
 export function checkNpmOptions(opts: PlanOptions): void {
-  if (opts.npmVersion !== undefined && !/^[\w.^~<>=*| -]+$/.test(opts.npmVersion.trim())) {
-    throw new UsageError(`--npm-version must be an npm version or range (e.g. ^12, 11.6.2), got "${opts.npmVersion}"`);
+  // A single version or caret/tilde range: it is written into a shell command.
+  if (opts.npmVersion !== undefined && !/^[\^~]?\d+(\.(\d+|x))?(\.(\d+|x))?(-[\w.]+)?$/.test(opts.npmVersion.trim())) {
+    throw new UsageError(`--npm-version must be a version or a ^/~ range (e.g. ^12, ~11.6.0, 12.2.0), got "${opts.npmVersion}"`);
   }
-  if (opts.npmArgs !== undefined && (/[\r\n]/.test(opts.npmArgs) || /\$\{\{/.test(opts.npmArgs))) {
-    throw new UsageError('--npm-args must be a single line without ${{ }} expressions');
+  // Flags only (e.g. --registry=https://… --loglevel=warn): no shell syntax, no expressions.
+  if (opts.npmArgs !== undefined && !/^(\s*--?[\w-]+(=[\w@%+:,./~-]+)?)*\s*$/.test(opts.npmArgs)) {
+    throw new UsageError('--npm-args must be npm flags such as "--registry=https://registry.npmjs.org --loglevel=warn" (no shell characters or ${{ }})');
+  }
+  if (opts.repo !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) {
+    throw new UsageError(`repo must look like owner/repo, got "${opts.repo}"`);
   }
   if (opts.readToken !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(opts.readToken)) {
     throw new UsageError(`--read-token must be a secret name such as NPM_READ_TOKEN, got "${opts.readToken}"`);
@@ -134,13 +139,20 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
     const text = texts.get(w.file)!;
     const mentioned = pubs.filter((p) => p.dir !== '.' && (text.includes(p.dir) || text.includes(p.name)));
     const covered = publishing.length === 1 || mentioned.length === 0 ? pubs : mentioned;
-    const envs = [...new Set(w.jobs.map((j) => j.environment))];
+    const okJobs = w.jobs.filter((j) => !j.blocked);
+    if (okJobs.length === 0) continue; // never name a blocked workflow as a trusted publisher
+    const envs = [...new Set(okJobs.map((j) => j.environment))];
     for (const p of covered) {
       for (const env of envs) {
-        const parts = ['npm trust github', p.name, '--repo', slug ?? '<owner>/<repo>', '--file', w.trustFile];
+        if (!isValidNpmName(p.name)) {
+          findings.push({ level: 'error', file: p.file, code: 'invalid-package-name', message: `"${p.name}" is not a valid npm package name, so no trust command was generated for it.` });
+          continue;
+        }
+        const parts = ['npm', 'trust', 'github', p.name, '--repo', slug ?? '<owner>/<repo>', '--file', w.trustFile];
         if (env) parts.push('--env', env);
         parts.push('--allow-publish', '--yes');
-        trust.push({ package: p.name, workflow: w.trustFile, environment: env, command: parts.join(' ') + extraArgs });
+        const command = parts.map((x) => (x === '<owner>/<repo>' ? x : shellQuote(x))).join(' ') + extraArgs;
+        trust.push({ package: p.name, workflow: w.trustFile, environment: env, command });
       }
     }
   }
@@ -171,6 +183,9 @@ export async function buildPlan(root: string, opts: PlanOptions = {}): Promise<I
     ...pkgPlans.filter((p) => p.change).map((p) => ({ file: p.file, description: p.change! })),
   ];
   const secrets = [...new Set(publishing.flatMap((w) => w.secrets))];
+  if (opts.readToken && secrets.includes(opts.readToken)) {
+    findings.push({ level: 'warning', file: '.github/workflows', code: 'read-token-is-publish-token', message: `\`${opts.readToken}\` is the secret that publishes today. Install steps would get that publish-capable token. Put a read-only token in it (or use a new secret name) and revoke the old one.` });
+  }
   const hasErrors = findings.some((f) => f.level === 'error');
   const allTokenless = publishing.length > 0 && publishing.every((w) => w.jobs.every((j) => j.alreadyTokenless));
   const status: Status = publishing.length === 0 ? 'no-publish-workflow' : hasErrors ? 'blocked' : allTokenless && changes.length === 0 ? 'already-tokenless' : 'ready';
@@ -217,6 +232,9 @@ function nextSteps(status: Status, trust: TrustCommand[], secrets: string[], slu
   }
   steps.push('Merge, then let the release workflow publish once. Check the new version shows a provenance badge on npmjs.com.');
   const old = secrets.filter((s) => s !== readToken);
+  if (readToken && secrets.includes(readToken)) {
+    steps.push(`\`${readToken}\` holds your current publish token. Replace its value with a read-only token before merging (\`gh secret set ${readToken}\`), then revoke the old token on npmjs.com → Access Tokens.`);
+  }
   if (old.length > 0) steps.push(`Delete the old publish token secret${old.length > 1 ? 's' : ''} (${old.map((s) => `\`gh secret delete ${s}\``).join(', ')}) and revoke the token on npmjs.com → Access Tokens.`);
   steps.push('Optional: in each package\'s npm settings choose "Require two-factor authentication and disallow tokens".');
   return steps;
@@ -295,4 +313,14 @@ function lcsDiff(a: string[], b: string[]): string[] {
   while (i < a.length) out.push(`-${a[i++]}`);
   while (j < b.length) out.push(`+${b[j++]}`);
   return out;
+}
+
+/** npm package name rules: lowercase, URL-safe, optional @scope/. */
+export function isValidNpmName(name: string): boolean {
+  return name.length <= 214 && /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/.test(name);
+}
+
+/** Single-quote a word for the shell unless it only has safe characters. */
+export function shellQuote(word: string): string {
+  return /^[\w@%+=:,./~-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\''`)}'`;
 }
